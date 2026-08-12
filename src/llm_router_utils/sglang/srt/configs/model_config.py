@@ -1,0 +1,66 @@
+"""Lightweight ModelConfig extracted from sglang.srt.configs.model_config.
+
+Only fields/methods referenced by the _process_messages call chain are kept.
+"""
+from __future__ import annotations
+
+import logging
+from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
+
+
+class ModelConfig:
+    """Minimal ModelConfig — loads HF config via transformers.AutoConfig."""
+
+    def __init__(
+        self,
+        model_path: str,
+        trust_remote_code: bool = True,
+        revision: Optional[str] = None,
+        context_length: Optional[int] = None,
+        is_embedding: Optional[bool] = None,
+        enable_multimodal: Optional[bool] = None,
+        dtype: str = "auto",
+        quantization: Optional[str] = None,
+        override_config_file: Optional[str] = None,
+        sampling_defaults: str = "openai",
+    ) -> None:
+        self.model_path = model_path
+        self.revision = revision
+        self.quantization = quantization
+        self.sampling_defaults = sampling_defaults
+        self.context_length = context_length
+        self.is_embedding = is_embedding if is_embedding is not None else False
+
+        # Load HF config
+        from transformers import AutoConfig
+        try:
+            self.hf_config = AutoConfig.from_pretrained(
+                model_path,
+                trust_remote_code=trust_remote_code,
+                revision=revision,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to load HF config for {model_path}: {e}")
+            self.hf_config = None
+
+        # Determine multimodal
+        self.is_multimodal = False
+        if enable_multimodal and self.hf_config is not None:
+            # Heuristic: check for common multimodal model type markers
+            model_type = getattr(self.hf_config, "model_type", "")
+            multimodal_markers = ["vlm", "vl", "vision", "multimodal", "image"]
+            self.is_multimodal = any(m in model_type.lower() for m in multimodal_markers)
+
+        # Context length from config if not specified
+        if self.context_length is None and self.hf_config is not None:
+            self.context_length = getattr(self.hf_config, "max_position_embeddings", None)
+
+    def get_default_sampling_params(self) -> dict:
+        """Return default sampling params. Currently returns empty dict.
+
+        In original sglang this reads from sampling_defaults; here we keep
+        a minimal stub since _process_messages only needs the method to exist.
+        """
+        return {}

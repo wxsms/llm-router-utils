@@ -24,6 +24,8 @@ dependencies = [
   "mistral_common>=1.11.5",
   "packaging",
   "huggingface_hub",
+  "msgspec",
+  "xgrammar",
 ]
 
 [project.optional-dependencies]
