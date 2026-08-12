@@ -6,6 +6,11 @@ This library does **not** include any inference engine code. It only provides th
 
 **Upstream source:** sglang [release/v0.5.16](https://github.com/sgl-project/sglang/tree/release/v0.5.16).
 
+## Installation
+
+```bash
+pip install llm-router-utils
+```
 
 ## Usage
 
