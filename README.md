@@ -38,18 +38,20 @@ result = openai_serving_chat._process_messages(request, is_multimodal=False)
 
 Migrated modules under `llm_router_utils/sglang/srt/` (paths preserved from upstream):
 
-- **`parser/`** — conversation templates (~50 model families, `SeparatorStyle` enum, `generate_chat_conv`), reasoning parser (`ReasoningParser` + detectors for deepseek/qwen3/mistral/gemma4/apertus/glm/inkling/...), harmony parser, inkling renderer/tokenizer, jinja template utils, template detection (auto-detection of reasoning/tool-call parser from chat template + tokenizer vocab), `TemplateManager` with `TokenizerLike` Protocol.
-- **`function_call/`** — `FunctionCallParser` + 33 detector implementations (hermes, glm4/glm47, deepseekv3/v31/v32/v4, qwen3_coder, qwen25, kimik2, mistral, llama3.2, minicpm5, minimax_m2/m3, poolside_v1, step3, internlm, lfm2, mimo, gpt-oss, gigachat3, apertus2509, trinity, pythonic, inkling, cohere_command4, gemma4, hunyuan), `JsonArrayParser`, schema utils.
-- **`entrypoints/openai/`** — `protocol.py` (full OpenAI-compatible request/response types, ~1900 lines), `serving_base.py`, slimmed `serving_chat.py` (only `_process_messages` call chain kept: `_apply_jinja_template`, `_apply_conversation_template`, `_encode_messages`, `_get_reasoning_from_request`, `_patch_reasoning_skip_special_tokens`, etc.), `chat_encoding.py`, `encoding_dsv32.py`, `encoding_dsv4.py`, `sse_utils.py`, `usage_processor.py`, `utils.py`.
-- **`managers/`** — slimmed `TokenizerManager` (initializer + `init_model_config` + `init_tokenizer_and_processor` only; pure-text path uses upstream `get_tokenizer` for byte-parity with sglang, including `SGLANG_PATCH_TOKENIZER` behavior), slimmed `io_struct.py` (`GenerateReqInput`/`EmbeddingReqInput`), `embed_types.py` stub.
-- **`configs/`** — slimmed `ModelConfig` (loads HF config via upstream `get_config`; exposes `hf_config`, `is_multimodal`, `get_default_sampling_params`, `context_length`), plus `model_config_parser_registry.py`.
-- **`tokenizer/`** — `tiktoken_tokenizer.py`.
-- **`disaggregation/`** — `kv_events.py` (KV cache event structs: `EventBatch`, `KVCacheEvent`, `StorageMedium`, `BlockStored`, `BlockRemoved`, `AllBlocksCleared`, `KVEventBatch` — publisher machinery stripped).
-- **`mem_cache/`** — `utils.py` vendored from sglang (pure-Python SHA256 hash helpers: `hash_str_to_int64`, `get_hash_str`, `compute_node_hash_values`, `split_node_hash_value`). Byte-identical to sglang's C++ extension; inference-engine deps (kernels / cpp_utils / evict_policy) stripped.
-- **`observability/`** — `metrics_collector.py` slimmed to data classes only: `QueueCount`, `SchedulerStats`, `compute_routing_key_stats`. The heavy `*MetricsCollector` classes (depend on prometheus_client / forward_batch_info / schedule_batch.Req) are stripped.
-- **`utils/hf_transformers/`** — restored from upstream (`common.py`, `config.py`, `tokenizer.py`, `mistral_utils.py`); `get_tokenizer` / `get_config` provide byte-parity with sglang's pure-text tokenizer loading. Slimmed `hf_transformers_patches.py` (only torch-free patches kept). `patch_tokenizer.py` verbatim.
-- **`connector/`** (stub) — `create_remote_connector` raises `NotImplementedError` (remote storage is an inference-engine feature).
-- **Top-level slimmed files** — `environ.py` (env var registry), `server_args.py` (`ServerArgs` with `device`/`revision`/`tokenizer_backend` fields + `PortArgs.init_new` for single-node setup), `srt/utils/common.py` (`ImageData`/`VideoData`/`read_system_prompt_from_file` + hf_transformers helpers: `get_bool_env_var`/`lru_cache_frozenset`/`is_hip`/`is_npu`/`is_remote_url`/etc.), `sglang/utils.py` (`convert_json_schema_to_str`/`is_in_ci`/`TypeBasedDispatcher`/`LazyImport`).
+| Module | Description |
+|---|---|
+| `parser/` | Conversation templates (~50 model families), `ReasoningParser` + detectors, harmony/inkling, jinja utils, template detection, `TemplateManager` with `TokenizerLike` Protocol |
+| `function_call/` | `FunctionCallParser` + 33 detectors (hermes, glm, deepseek, qwen, kimi, mistral, …), `JsonArrayParser`, schema utils |
+| `entrypoints/openai/` | `protocol.py` (~1900 lines, full OpenAI types), slimmed `serving_chat.py` (only `_process_messages` chain), `serving_base.py`, `chat_encoding.py`, `encoding_dsv32/dsv4.py`, `sse_utils.py`, `usage_processor.py`, `utils.py` |
+| `managers/` | Slimmed `TokenizerManager` (uses upstream `get_tokenizer` for byte-parity incl. `SGLANG_PATCH_TOKENIZER`), slimmed `io_struct.py`, `embed_types.py` stub |
+| `configs/` | Slimmed `ModelConfig` (uses upstream `get_config`; exposes `hf_config`/`is_multimodal`/`get_default_sampling_params`/`context_length`), `model_config_parser_registry.py` |
+| `tokenizer/` | `tiktoken_tokenizer.py` |
+| `disaggregation/` | `kv_events.py` — KV cache event structs (`EventBatch`, `KVCacheEvent`, `StorageMedium`, `BlockStored`, `BlockRemoved`, `AllBlocksCleared`, `KVEventBatch`) |
+| `mem_cache/` | `utils.py` — pure-Python SHA256 hash helpers, byte-identical to sglang's C++ extension |
+| `observability/` | `metrics_collector.py` — data classes only: `QueueCount`, `SchedulerStats`, `compute_routing_key_stats`. Heavy `*MetricsCollector` classes stripped |
+| `utils/hf_transformers/` | Restored `common.py`/`config.py`/`tokenizer.py`/`mistral_utils.py` — upstream `get_tokenizer`/`get_config`. Slimmed `hf_transformers_patches.py` (torch-free only). `patch_tokenizer.py` verbatim |
+| `connector/` (stub) | `create_remote_connector` raises `NotImplementedError` |
+| Top-level slimmed files | `environ.py` (env var registry) · `server_args.py` (`device`/`revision`/`tokenizer_backend` + `PortArgs.init_new`) · `srt/utils/common.py` (`ImageData`/`VideoData`/`read_system_prompt_from_file` + hf helpers) · `sglang/utils.py` (`convert_json_schema_to_str`/`is_in_ci`/`TypeBasedDispatcher`/`LazyImport`) |
 
 ## What's NOT included
 
