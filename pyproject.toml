@@ -44,6 +44,7 @@ Source = "https://github.com/wxsms/llm-router-utils"
 Issues = "https://github.com/wxsms/llm-router-utils/issues"
 
 [project.optional-dependencies]
+fastokens = ["fastokens>=0.1.1,<0.2.0"]
 test = ["pytest", "pytest-cov"]
 
 [tool.setuptools.packages.find]

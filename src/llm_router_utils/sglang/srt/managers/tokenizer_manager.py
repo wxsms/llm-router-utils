@@ -40,14 +40,20 @@ class TokenizerManager:
         )
 
     def init_tokenizer_and_processor(self) -> None:
-        from transformers import AutoTokenizer
+        from llm_router_utils.sglang.srt.utils.hf_transformers.tokenizer import (
+            get_tokenizer,
+        )
 
         tokenizer_path = self.server_args.tokenizer_path or self.server_args.model_path
         try:
-            self.tokenizer = AutoTokenizer.from_pretrained(
+            self.tokenizer = get_tokenizer(
                 tokenizer_path,
+                tokenizer_mode=self.server_args.tokenizer_mode,
                 trust_remote_code=self.server_args.trust_remote_code,
-                use_fast=self.server_args.tokenizer_mode == "auto",
+                tokenizer_revision=getattr(self.server_args, "revision", None),
+                tokenizer_backend=getattr(
+                    self.server_args, "tokenizer_backend", "huggingface"
+                ),
             )
         except Exception as e:
             logger.warning(f"Failed to load tokenizer from {tokenizer_path}: {e}")
