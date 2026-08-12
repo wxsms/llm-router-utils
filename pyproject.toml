@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llm-router-utils"
-version = "0.2.0"
+version = "0.2.1"
 description = "Lightweight extraction of sglang's reasoning/tool-call parsers and chat template rendering for router services."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -29,13 +29,13 @@ dependencies = [
   "orjson",
   "typing_extensions",
   "tiktoken",
-  "transformers",
-  "openai",
+  "transformers==5.12.1",
+  "openai==2.6.1",
   "mistral_common>=1.11.5",
   "packaging",
   "huggingface_hub",
   "msgspec",
-  "xgrammar",
+  "xgrammar==0.2.1",
 ]
 
 [project.urls]
