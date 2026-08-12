@@ -33,10 +33,10 @@ class ModelConfig:
         self.context_length = context_length
         self.is_embedding = is_embedding if is_embedding is not None else False
 
-        # Load HF config
-        from transformers import AutoConfig
+        # Load HF config via upstream's get_config (byte-equivalent to sglang)
+        from llm_router_utils.sglang.srt.utils.hf_transformers.config import get_config
         try:
-            self.hf_config = AutoConfig.from_pretrained(
+            self.hf_config = get_config(
                 model_path,
                 trust_remote_code=trust_remote_code,
                 revision=revision,

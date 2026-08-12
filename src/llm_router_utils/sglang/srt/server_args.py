@@ -27,6 +27,8 @@ class ServerArgs:
     skip_tokenizer_init: bool = False
     trust_remote_code: bool = False
     tokenizer_mode: str = "auto"
+    revision: Optional[str] = None
+    tokenizer_backend: str = "huggingface"
 
     def __post_init__(self):
         if self.tokenizer_path is None:
