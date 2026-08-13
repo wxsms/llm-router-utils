@@ -12,6 +12,19 @@ This library does **not** include any inference engine code. It only provides th
 pip install llm-router-utils
 ```
 
+### CPU-only torch (optional, smaller on Linux)
+
+This library depends on `xgrammar`, which declares `torch>=1.10.0`. By default pip pulls the CUDA-enabled torch wheel from PyPI (~502 MB on Linux x86_64). Routers don't use torch for GPU ops — only a lazy `torch.version.hip` / `torch.npu.is_available()` probe that returns `False` when torch is absent — so CPU-only torch is sufficient.
+
+To install CPU-only torch, install it from the PyTorch CPU index **before** this package:
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install llm-router-utils
+```
+
+The second command sees torch already satisfied and skips the CUDA download. On Linux x86_64 this saves ~319 MB (502 → 183). On Windows there is no size difference (both ~116 MB), so this step is only useful on Linux.
+
 ## Usage
 
 ```python
