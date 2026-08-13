@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import copy
+import json
 import logging
 import math
+import time
+import uuid
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
@@ -20,13 +23,23 @@ import orjson
 from llm_router_utils.sglang.srt.entrypoints.openai import encoding_dsv4, encoding_dsv32
 from llm_router_utils.sglang.srt.entrypoints.openai.protocol import (
     ChatCompletionRequest,
+    ChatCompletionResponseStreamChoice,
+    ChatCompletionStreamResponse,
+    DeltaMessage,
+    FunctionResponse,
     MessageProcessingResult,
+    PromptTokensDetails,
     ResponseParserProtocol,
+    ToolCall,
+    ToolCallProcessingResult,
     ToolChoice,
 )
 from llm_router_utils.sglang.srt.entrypoints.openai.serving_base import OpenAIServingBase
+from llm_router_utils.sglang.srt.entrypoints.openai.usage_processor import UsageProcessor
 from llm_router_utils.sglang.srt.environ import envs
+from llm_router_utils.sglang.srt.function_call.core_types import ToolCallItem
 from llm_router_utils.sglang.srt.function_call.function_call_parser import FunctionCallParser
+from llm_router_utils.sglang.srt.function_call.json_array_parser import JsonArrayParser
 from llm_router_utils.sglang.srt.function_call.utils import (
     get_json_schema_constraint,
 )
@@ -493,6 +506,350 @@ class OpenAIServingChat(OpenAIServingBase):
 
         result.tool_call_constraint = tool_call_constraint
         return result
+
+    def _continuous_usage_cached_details(
+        self, content: Dict[str, Any]
+    ) -> Optional[PromptTokensDetails]:
+        if not self.tokenizer_manager.server_args.enable_cache_report:
+            return None
+        return UsageProcessor._details_if_cached(
+            content["meta_info"].get("cached_tokens", 0)
+        )
+
+    def _process_tool_call_id(
+        self,
+        call_item: ToolCallItem,
+        history_tool_calls_cnt: int,
+    ) -> str:
+        """Process for generating a new and unique `tool_call_id`"""
+        if self.tool_call_parser != "kimi_k2":
+            # A simple uuid is sufficient for all models except for Kimi-K2.
+            tool_call_id = f"call_{uuid.uuid4().hex[:24]}"
+            return tool_call_id
+        else:
+            # Align with Kimi-K2 format: functions.{name}:{index}
+            # Kimi-K2 allows multiple tool_calls in one message; SGLang sets call_item.tool_index to the *local* position inside that message.
+            # Therefore, the index must be corrected by using `history_tool_calls_cnt + call_item.tool_index` to ensure globally unique and properly ordered.
+            tool_call_id = f"functions.{call_item.name}:{history_tool_calls_cnt+call_item.tool_index}"
+            logger.debug(
+                f"Process tool call idx, parser: {self.tool_call_parser}, tool_call_id: {tool_call_id}, history_cnt: {history_tool_calls_cnt}"
+            )
+            return tool_call_id
+
+    def _process_tool_calls(
+        self,
+        text: str,
+        tools: List[Any],
+        finish_reason: Dict[str, Any],
+        tool_choice: Optional[Union[str, ToolChoice]] = None,
+        history_tool_calls_cnt: int = 0,
+    ) -> ToolCallProcessingResult:
+        """Process tool calls in the response"""
+
+        is_required = tool_choice == "required" or isinstance(tool_choice, ToolChoice)
+
+        # Try model-specific parser when output is in native format.
+        # For required/named: only use parser when structural_tag was used
+        # as constraint (mirrors the streaming path). For auto: always try.
+        if self.tool_call_parser:
+            parser = FunctionCallParser(
+                tools, self.tool_call_parser, tokenizer=self.tokenizer_manager.tokenizer
+            )
+            should_try_parser = (
+                not is_required or parser.detector.supports_structural_tag()
+            )
+            if should_try_parser and parser.has_tool_call(text):
+                try:
+                    text, call_info_list = parser.parse_non_stream(text)
+                    if not call_info_list:
+                        return ToolCallProcessingResult(None, text, finish_reason)
+
+                    tool_calls = []
+                    for call_info in call_info_list:
+                        tool_id = self._process_tool_call_id(
+                            call_info, history_tool_calls_cnt
+                        )
+                        tool_calls.append(
+                            ToolCall(
+                                id=tool_id,
+                                index=getattr(call_info, "tool_index", None),
+                                function=FunctionResponse(
+                                    name=call_info.name,
+                                    arguments=call_info.parameters,
+                                ),
+                            )
+                        )
+                    if finish_reason["type"] == "stop":
+                        finish_reason["type"] = "tool_calls"
+                        finish_reason["matched"] = None
+                    return ToolCallProcessingResult(tool_calls, text, finish_reason)
+                except Exception as e:
+                    logger.error(f"Tool call parsing error: {e}")
+                    return ToolCallProcessingResult(None, text, finish_reason)
+
+        # json_schema constraint → JSON array output for required/named
+        if is_required:
+            original_finish_type = finish_reason["type"]
+            if finish_reason["type"] == "stop":
+                finish_reason["type"] = "tool_calls"
+                finish_reason["matched"] = None
+            try:
+                tool_call_data = orjson.loads(text)
+                tool_calls = []
+                for i, tool in enumerate(tool_call_data):
+                    call_info = ToolCallItem(
+                        tool_index=i,
+                        name=tool["name"],
+                        parameters=json.dumps(tool["parameters"], ensure_ascii=False),
+                    )
+                    tool_id = self._process_tool_call_id(
+                        call_info, history_tool_calls_cnt
+                    )
+                    tool_calls.append(
+                        ToolCall(
+                            id=tool_id,
+                            index=i,
+                            function=FunctionResponse(
+                                name=tool["name"],
+                                arguments=json.dumps(
+                                    tool["parameters"], ensure_ascii=False
+                                ),
+                            ),
+                        )
+                    )
+                return ToolCallProcessingResult(tool_calls, "", finish_reason)
+            except Exception as e:
+                logger.error(f"Tool call parsing error: {e}")
+                finish_reason["type"] = original_finish_type
+                return ToolCallProcessingResult(None, text, finish_reason)
+
+        return ToolCallProcessingResult(None, text, finish_reason)
+
+    def _get_history_tool_calls_cnt(self, request: ChatCompletionRequest) -> int:
+        """Counts the number of tool calls in the request's message history.
+
+        NOTE: This method is only useful for models that include self-increasing
+        history tool call idx in tool calls id, such as kimi-k2
+
+        Args:
+            request: The chat completion request object.
+
+        Returns:
+            The total number of tool calls in the history, or 0 if not applicable.
+        """
+        messages = getattr(request, "messages", [])
+        idx = 0
+        for msg in messages:
+            if msg.role == "assistant":
+                tool_calls = getattr(msg, "tool_calls", None)
+                idx += len(list(tool_calls)) if tool_calls is not None else 0  # noqa
+        return idx
+
+    async def _process_tool_call_stream(
+        self,
+        index: int,
+        delta: str,
+        parser_dict: Dict[int, FunctionCallParser],
+        content: Dict[str, Any],
+        request: ChatCompletionRequest,
+        has_tool_calls: Dict[int, bool],
+        continuous_usage_stats: bool = False,
+    ):
+        """Process tool calls in streaming response"""
+        if index not in parser_dict:
+            is_required = request.tool_choice == "required" or isinstance(
+                request.tool_choice, ToolChoice
+            )
+            # For required/named tool choice: use JsonArrayParser when the
+            # constrained output is plain JSON (detector doesn't support
+            # structural_tag or no parser configured). Use FunctionCallParser
+            # only when the detector supports structural_tag and will produce
+            # native format output.
+            if is_required:
+                use_native_parser = False
+                if self.tool_call_parser:
+                    probe = FunctionCallParser(
+                        tools=request.tools,
+                        tool_call_parser=self.tool_call_parser,
+                        tokenizer=self.tokenizer_manager.tokenizer,
+                    )
+                    use_native_parser = probe.detector.supports_structural_tag()
+                if use_native_parser:
+                    parser_dict[index] = probe
+                else:
+                    parser_dict[index] = JsonArrayParser()
+            else:
+                parser_dict[index] = FunctionCallParser(
+                    tools=request.tools,
+                    tool_call_parser=self.tool_call_parser,
+                    tokenizer=self.tokenizer_manager.tokenizer,
+                )
+
+        parser = parser_dict[index]
+
+        # Handle both FunctionCallParser and JsonArrayParser
+        if isinstance(parser, JsonArrayParser):
+            result = parser.parse_streaming_increment(delta, request.tools)
+            normal_text, calls = result.normal_text, result.calls
+        else:
+            normal_text, calls = parser.parse_stream_chunk(delta)
+
+        # Yield normal text
+        if normal_text:
+            choice_data = ChatCompletionResponseStreamChoice(
+                index=index,
+                delta=DeltaMessage(content=normal_text),
+                finish_reason=None,
+            )
+            chunk = ChatCompletionStreamResponse(
+                id=content["meta_info"]["id"],
+                created=int(time.time()),
+                choices=[choice_data],
+                model=request.model,
+            )
+
+            # Add usage stats if continuous_usage_stats is enabled
+            if continuous_usage_stats:
+                prompt_tokens = content["meta_info"].get("prompt_tokens", 0)
+                completion_tokens = content["meta_info"].get("completion_tokens", 0)
+                reasoning_tokens = content["meta_info"].get("reasoning_tokens", 0)
+                chunk.usage = UsageProcessor.calculate_token_usage(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    reasoning_tokens=reasoning_tokens,
+                    cached_tokens=self._continuous_usage_cached_details(content),
+                )
+
+            yield f"data: {chunk.model_dump_json()}\n\n"
+
+        # Yield tool calls
+        history_tool_calls_cnt = self._get_history_tool_calls_cnt(request)
+        for call_item in calls:
+            # Mark that this choice has tool calls
+            has_tool_calls[index] = True
+
+            # Tool call ID should be generated only once per tool call
+            if call_item.name:
+                # First chunk: include ID and function name
+                tool_call_id = self._process_tool_call_id(
+                    call_item, history_tool_calls_cnt
+                )
+                function_name = call_item.name
+            else:
+                # Subsequent chunks: null ID and name for argument deltas
+                tool_call_id = None
+                function_name = None
+
+            tool_call = ToolCall(
+                id=tool_call_id,
+                index=call_item.tool_index,
+                function=FunctionResponse(
+                    name=function_name,
+                    arguments=call_item.parameters,
+                ),
+            )
+
+            choice_data = ChatCompletionResponseStreamChoice(
+                index=index,
+                delta=DeltaMessage(tool_calls=[tool_call]),
+                finish_reason=None,
+            )
+            chunk = ChatCompletionStreamResponse(
+                id=content["meta_info"]["id"],
+                created=int(time.time()),
+                choices=[choice_data],
+                model=request.model,
+            )
+
+            # Add usage stats if continuous_usage_stats is enabled
+            if continuous_usage_stats:
+                prompt_tokens = content["meta_info"].get("prompt_tokens", 0)
+                completion_tokens = content["meta_info"].get("completion_tokens", 0)
+                reasoning_tokens = content["meta_info"].get("reasoning_tokens", 0)
+                chunk.usage = UsageProcessor.calculate_token_usage(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    reasoning_tokens=reasoning_tokens,
+                    cached_tokens=self._continuous_usage_cached_details(content),
+                )
+
+            yield f"data: {chunk.model_dump_json()}\n\n"
+
+    def _check_for_unstreamed_tool_args(
+        self,
+        parser: Union[FunctionCallParser, JsonArrayParser],
+        content: Dict[str, Any],
+        request: ChatCompletionRequest,
+        index: int,
+    ) -> Optional[str]:
+        """
+        Check for any remaining tool call arguments that need to be streamed
+        when generation finishes. This ensures tool calls are properly completed
+        even if the model generates the final arguments in the last chunk.
+        """
+        # Get the detector - either from FunctionCallParser or directly if json detector
+        detector = parser.detector if hasattr(parser, "detector") else parser
+
+        # Only check if we have tool calls and the detector has tracked data
+        if (
+            not hasattr(detector, "prev_tool_call_arr")
+            or not detector.prev_tool_call_arr
+        ):
+            return None
+
+        if (
+            not hasattr(detector, "streamed_args_for_tool")
+            or not detector.streamed_args_for_tool
+        ):
+            return None
+
+        # Get the last tool call that was being processed
+        tool_index = len(detector.prev_tool_call_arr) - 1
+        if tool_index < 0 or tool_index >= len(detector.streamed_args_for_tool):
+            return None
+
+        # Get expected vs actual arguments
+        expected_args = detector.prev_tool_call_arr[tool_index].get("arguments", {})
+        if isinstance(expected_args, str):
+            expected_call = expected_args
+        else:
+            expected_call = json.dumps(expected_args, ensure_ascii=False)
+        actual_call = detector.streamed_args_for_tool[tool_index]
+
+        # Check if there are remaining arguments to send
+        remaining_call = (
+            expected_call[len(actual_call) :]
+            if expected_call.startswith(actual_call)
+            else ""
+        )
+
+        if remaining_call:
+            # Create tool call chunk with remaining arguments
+            tool_call = ToolCall(
+                id=None,  # No ID for argument deltas
+                index=tool_index,
+                function=FunctionResponse(
+                    name=None,  # No name for argument deltas
+                    arguments=remaining_call,
+                ),
+            )
+
+            choice_data = ChatCompletionResponseStreamChoice(
+                index=index,
+                delta=DeltaMessage(tool_calls=[tool_call]),
+                finish_reason=None,  # Don't send finish_reason with this chunk
+            )
+
+            chunk = ChatCompletionStreamResponse(
+                id=content["meta_info"]["id"],
+                created=int(time.time()),
+                choices=[choice_data],
+                model=request.model,
+            )
+
+            return f"data: {chunk.model_dump_json()}\n\n"
+
+        return None
 
     def _apply_jinja_template(
         self,
