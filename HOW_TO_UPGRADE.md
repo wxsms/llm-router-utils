@@ -2,7 +2,7 @@
 
 This repository is a lightweight extraction of sglang's frontend message-processing layer. When upstream sglang releases a new version, the retained files in this repo must be synced to the new version. This document describes the full upgrade workflow, trimming rules, and common pitfalls.
 
-Upstream sglang is pinned as a git submodule at `vendor/sglang` (branch `release/v0.5.17`). Use it as the reference for diffs and file content during upgrades.
+Upstream sglang is pinned as a git submodule at `vendor/sglang` (branch `release/vX.Y.Z`). Use it as the reference for diffs and file content during upgrades.
 
 ## Prerequisites
 
