@@ -392,7 +392,7 @@ class BaseFormatDetector(ABC):
             tool_choice: The tool choice setting from the request
             thinking_mode: Whether to include the model's reasoning prefix in
                 the returned structural tag. Pass False when SGLang's
-                ReasonerGrammarBackend will own the reasoning prefix
+                ReasonerGrammarBackend will own the <think>...</think> prefix
                 (the typical case when --reasoning-parser is configured) so
                 only one layer constrains the reasoning section.
             parallel_tool_calls: Whether multiple tool calls may appear in one

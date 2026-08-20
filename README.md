@@ -6,6 +6,20 @@ This library does **not** include any inference engine code. It only provides th
 
 **Upstream source:** sglang [release/v0.5.17](https://github.com/sgl-project/sglang/tree/release/v0.5.17).
 
+## 版本对应关系
+
+本仓库版本与上游 sglang 版本的对应关系，方便查找特定 sglang 版本对应的本仓库 release：
+
+| 本仓库版本 | 上游 sglang 版本 | 备注 |
+|---|---|---|
+| `v0.1.0` | [v0.5.16](https://github.com/sgl-project/sglang/tree/release/v0.5.16) | 初始提取 |
+| `v0.2.0` | [v0.5.16](https://github.com/sgl-project/sglang/tree/release/v0.5.16) | pin 依赖版本 |
+| `v0.2.1` | [v0.5.16](https://github.com/sgl-project/sglang/tree/release/v0.5.16) | pin transformers/openai/xgrammar |
+| `v0.2.2` | [v0.5.16](https://github.com/sgl-project/sglang/tree/release/v0.5.16) | 恢复 serving_chat tool-call 方法 |
+| `upgrade/sglang-0.5.17`（未发布） | [v0.5.17](https://github.com/sgl-project/sglang/tree/release/v0.5.17) | 升级至 0.5.17，新增 KimiK3 检测器 |
+
+> 升级流程见 [HOW_TO_UPGRADE.md](HOW_TO_UPGRADE.md)。
+
 ## Installation
 
 ```bash
