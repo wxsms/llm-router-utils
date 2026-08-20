@@ -343,13 +343,13 @@ def _is_poolside_v1(ctx):
         ctx.has_text("<arg_key>")
         and ctx.has_text("<arg_value>")
         and (
-         # Laguna-XS.2 spells out the tool-call format in prose;
-        # Laguna-S-2.1 does not, so also key on the tool preamble both
-        # template families share. The Poolside identity must not depend
-        # on the enable_thinking default, which differs between families.
-        ctx.has_text("unescaped XML-like object")
-        or ctx.has_text("All available function signatures are listed below")
-    )
+            # Laguna-XS.2 spells out the tool-call format in prose;
+            # Laguna-S-2.1 does not, so also key on the tool preamble both
+            # template families share. The Poolside identity must not depend
+            # on the enable_thinking default, which differs between families.
+            ctx.has_text("unescaped XML-like object")
+            or ctx.has_text("All available function signatures are listed below")
+        )
     )
     return has_poolside_tool_format or (
         ctx.reasoning_config

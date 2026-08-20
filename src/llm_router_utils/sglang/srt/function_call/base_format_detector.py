@@ -392,9 +392,14 @@ class BaseFormatDetector(ABC):
             tool_choice: The tool choice setting from the request
             thinking_mode: Whether to include the model's reasoning prefix in
                 the returned structural tag. Pass False when SGLang's
-                ReasonerGrammarBackend will own the <think>...</think> prefix
+                ReasonerGrammarBackend will own the reasoning prefix
                 (the typical case when --reasoning-parser is configured) so
                 only one layer constrains the reasoning section.
+            parallel_tool_calls: Whether multiple tool calls may appear in one
+                assistant response. xgrammar's get_model_structural_tag does
+                not expose this knob, so this base implementation ignores it;
+                only detectors that build their own tags (e.g. Kimi K3)
+                honor it.
 
         Returns:
             StructuralTag if this detector supports model-native tags, otherwise None

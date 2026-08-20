@@ -337,6 +337,80 @@ class OpenAIServingChat(OpenAIServingBase):
                 tools.extend(message.tools)
         return tools
 
+    def _prepare_kimi_k3_messages(
+        self,
+        messages: List[Dict[str, Any]],
+        request: ChatCompletionRequest,
+    ) -> tuple[List[Dict[str, Any]], int, Optional[str]]:
+        image_count = 0
+        for index, message in enumerate(messages):
+            content = message.get("content")
+            if isinstance(content, list):
+                parts = []
+                for part in content:
+                    if not isinstance(part, dict):
+                        continue
+                    part_type = part.get("type")
+                    if part_type in ("text", "input_text"):
+                        parts.append(
+                            {
+                                "type": "text",
+                                "text": neutralize_kimi_k3_image_placeholder(
+                                    part["text"]
+                                ),
+                            }
+                        )
+                    elif part_type in ("image_url", "input_image"):
+                        image = part.get("image_url") or {}
+                        if isinstance(image, str):
+                            image = {"url": image, "detail": part.get("detail")}
+                        parts.append({"type": "image_url", "image_url": image})
+                        image_count += 1
+                message["content"] = parts
+            elif isinstance(content, str):
+                message["content"] = neutralize_kimi_k3_image_placeholder(content)
+            elif content is None:
+                message["content"] = ""
+
+            if message.get("role") == "assistant":
+                for key in ("reasoning_content", "reasoning"):
+                    if key in message:
+                        message[key] = neutralize_kimi_k3_image_placeholder_value(
+                            message[key]
+                        )
+                for tool_call in message.get("tool_calls") or []:
+                    function = (
+                        tool_call.get("function")
+                        if isinstance(tool_call, dict)
+                        else None
+                    )
+                    if isinstance(function, dict) and "arguments" in function:
+                        function["arguments"] = (
+                            neutralize_kimi_k3_image_placeholder_value(
+                                function["arguments"]
+                            )
+                        )
+
+            source = request.messages[index]
+            if (
+                isinstance(source, ChatCompletionMessageGenericParam)
+                and source.role in ("system", "developer")
+                and source.tools
+            ):
+                message["tools"] = [
+                    tool.model_dump(exclude_unset=True, by_alias=True)
+                    for tool in source.tools
+                ]
+            if message.get("role") == "developer":
+                message["role"] = "system"
+
+        assistant_prefix = None
+        if request.continue_final_message:
+            messages, assistant_prefix = self._handle_last_assistant_message(
+                messages, request
+            )
+        return messages, image_count, assistant_prefix
+
     def _encode_messages(
         self,
         messages: List[Dict[str, Any]],
@@ -385,6 +459,71 @@ class OpenAIServingChat(OpenAIServingBase):
                     inkling_tokenizer.encode_special(CONTENT_TEXT),
                     *inkling_tokenizer.encode_text(assistant_prefix),
                 ]
+            return prompt_ids
+        if self.chat_encoding_spec == "kimi_k3":
+            messages, image_count, assistant_prefix = self._prepare_kimi_k3_messages(
+                messages, request
+            )
+            template_kwargs = dict(request.chat_template_kwargs or {})
+            template_kwargs.pop("tokenize", None)
+            template_kwargs.pop("return_dict", None)
+            template_kwargs.pop("image_prompts", None)
+            if image_count:
+                template_kwargs["image_prompts"] = ["<|media_pad|>"] * image_count
+
+            if (
+                request.reasoning_effort in ("low", "high", "max")
+                and "thinking_effort" not in template_kwargs
+            ):
+                template_kwargs["thinking_effort"] = request.reasoning_effort
+            elif request.reasoning_effort not in (
+                None,
+                "none",
+                "low",
+                "high",
+                "max",
+            ):
+                logger.warning(
+                    "Kimi K3 does not support reasoning_effort=%r; using the "
+                    "encoder default.",
+                    request.reasoning_effort,
+                )
+
+            effective_tools = self._effective_tools(request)
+            if (
+                effective_tools
+                and isinstance(request.tool_choice, str)
+                and request.tool_choice in ("required", "none")
+            ):
+                template_kwargs.setdefault("tool_choice", request.tool_choice)
+            if request.response_format is not None:
+                template_kwargs.setdefault(
+                    "response_format",
+                    request.response_format.model_dump(
+                        exclude_unset=True, by_alias=True
+                    ),
+                )
+
+            request_tools = (
+                [
+                    tool.model_dump(exclude_unset=True, by_alias=True)
+                    for tool in request.tools
+                ]
+                if request.tools
+                else None
+            )
+            prompt_ids = self.tokenizer_manager.tokenizer.apply_chat_template(
+                messages,
+                tokenize=True,
+                add_generation_prompt=True,
+                tools=request_tools,
+                return_dict=False,
+                **template_kwargs,
+            )
+            if assistant_prefix:
+                prompt_ids = self._append_assistant_prefix_to_prompt_ids(
+                    prompt_ids, assistant_prefix
+                )
             return prompt_ids
         return None
 
