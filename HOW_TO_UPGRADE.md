@@ -2,27 +2,36 @@
 
 This repository is a lightweight extraction of sglang's frontend message-processing layer. When upstream sglang releases a new version, the retained files in this repo must be synced to the new version. This document describes the full upgrade workflow, trimming rules, and common pitfalls.
 
+Upstream sglang is pinned as a git submodule at `vendor/sglang` (branch `release/v0.5.17`). Use it as the reference for diffs and file content during upgrades.
+
 ## Prerequisites
 
-1. **Clone the upstream sglang repo** (if not already present):
+1. **Initialize the submodule** (if not already checked out):
    ```bash
-   git clone https://github.com/sgl-project/sglang.git /path/to/sglang
-   cd /path/to/sglang
-   git checkout release/v0.5.X   # target version
+   cd /path/to/llm_router_utils
+   git submodule update --init vendor/sglang
    ```
 
 2. **Create an upgrade branch from master**:
    ```bash
-   cd /path/to/llm_router_utils
    git checkout master
    git checkout -b upgrade/sglang-0.5.X
    ```
 
-3. **Confirm the baseline tag**: the current sglang version this repo tracks is recorded in the "Upstream source" line of `README.md` and in the version table below it.
+3. **Switch the submodule to the target release** (when upgrading to a new sglang version):
+   ```bash
+   cd vendor/sglang
+   git fetch origin
+   git checkout release/v0.5.X
+   cd ..
+   git add vendor/sglang
+   ```
+
+4. **Confirm the baseline tag**: the current sglang version this repo tracks is recorded in the "Upstream source" line of `README.md` and in the version table at the bottom.
 
 ## Step 1: Determine the Change Set
 
-Let `$UPSTREAM` denote the upstream repo path (e.g. `E:/githome-windows/sglang_ksogit/python`). **Note**: use the `sglang/` prefix (without `python/`) when running `git diff`, otherwise it returns nothing.
+Let `$UPSTREAM` denote the submodule path (e.g. `vendor/sglang`). **Note**: use the `python/sglang/` prefix (the submodule's repo root has a `python/` directory) when running `git diff`, and use the `sglang/` prefix (without `python/`) — both work, but `sglang/` is shorter.
 
 ```bash
 cd $UPSTREAM
