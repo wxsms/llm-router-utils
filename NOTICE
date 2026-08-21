@@ -1,0 +1,32 @@
+llm-router-utils
+
+Copyright 2024-2026 llm-router-utils contributors
+
+This product is a derivative work of sglang
+(https://github.com/sgl-project/sglang), licensed under the Apache License,
+Version 2.0.
+
+==============================================================================
+The upstream sglang project's copyright notice is retained below per the terms
+of the Apache License, Version 2.0, §4(b) and §4(c).
+
+  Copyright 2023-2026 SGLang Team
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+
+==============================================================================
+This derivative work retains the upstream module layout under
+`src/llm_router_utils/sglang/srt/` and the upstream git submodule at
+`vendor/sglang` (pinned to a `release/vX.Y.Z` branch). Retained source files
+that carry an upstream copyright header keep it; slimmed files carry both the
+upstream copyright header and a "Derivative work" notice. See
+`HOW_TO_UPGRADE.md` for the trimming rules applied to derive this distribution.

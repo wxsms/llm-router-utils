@@ -13,6 +13,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+# Derivative work: slimmed for llm-router-utils. See HOW_TO_UPGRADE.md.
+# Original copyright notice retained per Apache 2.0 §4(b)/§4(c).
+
 """
 KV cache event structs.
 
@@ -34,7 +37,6 @@ import msgspec
 class EventBatch(
     msgspec.Struct,
     array_like=True,  # type: ignore[call-arg]
-    omit_defaults=True,  # type: ignore[call-arg]
     gc=False,  # type: ignore[call-arg]
 ):
     ts: float
@@ -45,7 +47,6 @@ class EventBatch(
 class KVCacheEvent(
     msgspec.Struct,
     array_like=True,  # type: ignore[call-arg]
-    omit_defaults=True,  # type: ignore[call-arg]
     gc=False,  # type: ignore[call-arg]
     tag=True,
 ):

@@ -11,6 +11,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# Derivative work: slimmed for llm-router-utils. See HOW_TO_UPGRADE.md.
+# Original copyright notice retained per Apache 2.0 §4(b)/§4(c).
+# ==============================================================================
 """Shared helpers used by config, tokenizer, and processor modules.
 
 Slimmed for llm-router-utils: the upstream ``sglang.srt.configs.*`` custom
@@ -419,12 +422,13 @@ def get_generation_config(
         return GenerationConfig.from_pretrained(
             model, trust_remote_code=trust_remote_code, revision=revision, **kwargs
         )
-    except FileNotFoundError:
-        return None
-    except OSError as e:
-        logger.warning(
-            "Failed to load generation config for %s: %s. "
-            "Proceeding without generation config.",
+    except (FileNotFoundError, OSError) as e:
+        # A missing generation_config.json is normal for many checkpoints and
+        # is surfaced by HF as a generic OSError (not FileNotFoundError). Treat
+        # it as benign — proceed without a generation config, at DEBUG level so
+        # normal startup logs stay quiet.
+        logger.debug(
+            "No generation config for %s: %s. Proceeding without it.",
             model,
             e,
         )

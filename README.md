@@ -4,7 +4,7 @@ Lightweight extraction of sglang's reasoning parser, tool-call parser, and chat 
 
 This library does **not** include any inference engine code. It only provides the "frontend" message processing pipeline: `OpenAIServingChat._process_messages` and its dependencies.
 
-**Upstream source:** sglang [release/v0.5.16](https://github.com/sgl-project/sglang/tree/release/v0.5.16).
+**Upstream source:** sglang [release/v0.5.17](https://github.com/sgl-project/sglang/tree/release/v0.5.17).
 
 ## Installation
 
@@ -70,6 +70,23 @@ Migrated modules under `llm_router_utils/sglang/srt/` (paths preserved from upst
 
 Inference engine code is intentionally stripped: schedulers, model loaders, layer implementations, CUDA/Triton kernels, sampling, constrained decoding, speculative decoding, LoRA runtime, distributed runtime, KV cache manager, HTTP server, multimodal processing, observability, and all CLI/launch scripts.
 
+## Version Mapping
+
+The mapping between this repo's releases and upstream sglang versions, so users can find the release that matches a given sglang version:
+
+| This repo | Upstream sglang |
+|---|---|
+| `v0.2.2` | [v0.5.16](https://github.com/sgl-project/sglang/tree/release/v0.5.16) |
+| `v0.3.0` | [v0.5.17](https://github.com/sgl-project/sglang/tree/release/v0.5.17) |
+
+> See [HOW_TO_UPGRADE.md](HOW_TO_UPGRADE.md) for the upgrade workflow.
+
 ## License
 
 Apache 2.0, adapted from [sglang](https://github.com/sgl-project/sglang).
+
+This is a derivative work of sglang. The upstream copyright notice is retained
+in [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE) per Apache 2.0 §4(b)/§4(c).
+Retained source files keep their upstream copyright headers; slimmed files
+carry both the upstream header and a "Derivative work" notice. See
+[`HOW_TO_UPGRADE.md`](HOW_TO_UPGRADE.md) for the trimming rules.

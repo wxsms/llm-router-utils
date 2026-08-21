@@ -12,7 +12,6 @@
 # limitations under the License.
 # ==============================================================================
 
-import ast
 import html
 import json
 import logging
@@ -23,6 +22,7 @@ from llm_router_utils.sglang.srt.entrypoints.openai.protocol import Tool
 from llm_router_utils.sglang.srt.environ import envs
 from llm_router_utils.sglang.srt.function_call.base_format_detector import BaseFormatDetector
 from llm_router_utils.sglang.srt.function_call.core_types import StreamingParseResult, _GetInfoFunc
+from llm_router_utils.sglang.srt.function_call.utils import safe_literal_eval
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +121,7 @@ def _convert_param_value(
                     func_name,
                 )
         try:
-            param_value = ast.literal_eval(param_value)  # safer
+            param_value = safe_literal_eval(param_value)
         except (ValueError, SyntaxError, TypeError):
             logger.warning(
                 "Parsed value '%s' of parameter '%s' cannot be "

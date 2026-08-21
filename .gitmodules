@@ -1,0 +1,4 @@
+[submodule "vendor/sglang"]
+	path = vendor/sglang
+	url = https://github.com/sgl-project/sglang.git
+	branch = release/v0.5.17
