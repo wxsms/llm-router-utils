@@ -1,6 +1,6 @@
-# Upgrade Guide: Syncing with Upstream sglang
+# Development Guide
 
-This repository is a lightweight extraction of sglang's frontend message-processing layer. When upstream sglang releases a new version, the retained files in this repo must be synced to the new version. This document describes the full upgrade workflow, trimming rules, and common pitfalls.
+This document is the development reference for the llm-router-utils repository — a lightweight extraction of sglang's frontend message-processing layer. It covers the upstream sync workflow, trimming rules, verification checks, release process, and common pitfalls.
 
 Upstream sglang is pinned as a git submodule at `vendor/sglang` (branch `release/vX.Y.Z`). Use it as the reference for diffs and file content during upgrades.
 
@@ -219,7 +219,98 @@ When you adopt a new upstream file that carries a header, the checker will flag 
 
 1. Update the "Upstream source" line in `README.md` to the new version.
 2. Append a row to the version table in `README.md`.
-3. Commit and tag.
+3. Commit (do not tag yet — tagging is part of the release process, see below).
+
+## Releasing a New Version
+
+Releases are triggered by pushing a `v*` tag to `origin`, which fires the `publish.yml` GitHub Actions workflow to build and publish to PyPI via Trusted Publishers. The process is irreversible — PyPI releases cannot be deleted or overwritten, so verify everything locally first.
+
+### 1. Pre-release verification
+
+Run the full verification suite on a clean checkout of `master`:
+
+```bash
+cd /path/to/llm_router_utils
+git checkout master
+git pull
+PYTHONPATH=src python -m pytest test/ -q   # regression baseline
+make check-torch                            # no direct torch import
+make check-parity                           # no NEW drift vs upstream
+make check-license                          # Apache 2.0 §4 attribution
+```
+
+All four must pass. Also confirm the `vendor/sglang` submodule is initialized (`git submodule status`) so the parity/license checks have their upstream reference.
+
+### 2. Bump the version
+
+The version lives in two places and they must agree:
+
+- `pyproject.toml` — `[project] version = "X.Y.Z"`
+- `src/llm_router_utils/sglang/_version.py` — `__version__ = "X.Y.Z"`
+
+Update both to the new version. Verify at runtime:
+
+```bash
+PYTHONPATH=src python -c "from llm_router_utils import __version__; print(__version__)"
+```
+
+### 3. Update version records
+
+- Ensure the "Upstream source" line in `README.md` points to the sglang version this release tracks.
+- Ensure the version table in `README.md` has a row for the new release (added during the upgrade, see Step 6 above).
+
+### 4. Build and verify locally
+
+```bash
+rm -rf dist/ build/ src/*.egg-info
+python -m pip install --quiet build
+python -m build
+ls -la dist/   # expect <name>-X.Y.Z.tar.gz and <name>-X.Y.Z-py3-none-any.whl
+```
+
+Confirm both an sdist (`.tar.gz`) and a wheel (`.whl`) are produced with the correct version in the filename. Clean up the artifacts afterward so they are not committed:
+
+```bash
+rm -rf dist/ build/ src/*.egg-info
+```
+
+### 5. Commit, tag, and push
+
+```bash
+git add pyproject.toml src/llm_router_utils/sglang/_version.py README.md
+git commit -m "release: vX.Y.Z (sglang vA.B.C)"
+git tag -a vX.Y.Z -m "vX.Y.Z — sglang vA.B.C"
+git push origin master
+git push origin vX.Y.Z
+```
+
+Pushing the tag triggers the `publish.yml` workflow. **This is the point of no return** — once the workflow succeeds, the package is live on PyPI.
+
+### 6. Confirm the publish
+
+Monitor the workflow:
+
+```bash
+gh run watch --exit-status   # or check https://github.com/<owner>/llm-router-utils/actions
+```
+
+Once it completes, verify the package is live on PyPI (allow a minute for index propagation):
+
+```bash
+python -c "import urllib.request, json; d=json.load(urllib.request.urlopen('https://pypi.org/pypi/llm-router-utils/json')); print('latest:', d['info']['version'])"
+```
+
+### Release checklist
+
+- [ ] All four checks pass (pytest, check-torch, check-parity, check-license)
+- [ ] `pyproject.toml` and `_version.py` bumped to the same version
+- [ ] `PYTHONPATH=src python -c "from llm_router_utils import __version__"` prints the new version
+- [ ] README version table has a row for the new release
+- [ ] `python -m build` produces correct sdist + wheel
+- [ ] Committed on `master`, tagged `vX.Y.Z` (annotated)
+- [ ] Pushed `master` + tag to `origin`
+- [ ] `publish.yml` workflow succeeded
+- [ ] Package visible on PyPI
 
 ## Common Pitfalls
 

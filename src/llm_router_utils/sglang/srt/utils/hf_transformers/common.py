@@ -11,7 +11,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-# Derivative work: slimmed for llm-router-utils. See HOW_TO_UPGRADE.md.
+# Derivative work: slimmed for llm-router-utils. See DEVELOPMENT.md.
 # Original copyright notice retained per Apache 2.0 §4(b)/§4(c).
 # ==============================================================================
 """Shared helpers used by config, tokenizer, and processor modules.

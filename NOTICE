@@ -29,4 +29,4 @@ This derivative work retains the upstream module layout under
 `vendor/sglang` (pinned to a `release/vX.Y.Z` branch). Retained source files
 that carry an upstream copyright header keep it; slimmed files carry both the
 upstream copyright header and a "Derivative work" notice. See
-`HOW_TO_UPGRADE.md` for the trimming rules applied to derive this distribution.
+`DEVELOPMENT.md` for the trimming rules applied to derive this distribution.

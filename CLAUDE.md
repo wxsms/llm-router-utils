@@ -31,7 +31,7 @@ test/
 └── integration/test_process_messages.py
 ```
 
-Upstream sglang is pinned as a git submodule at `vendor/sglang` (branch `release/vX.Y.Z`). Use it as the reference when diffing or porting changes. See `HOW_TO_UPGRADE.md` for the full upgrade workflow (change-set detection, trimming rules, hard invariants, Windows test adaptations, common pitfalls).
+Upstream sglang is pinned as a git submodule at `vendor/sglang` (branch `release/vX.Y.Z`). Use it as the reference when diffing or porting changes. See `DEVELOPMENT.md` for the full development workflow (change-set detection, trimming rules, hard invariants, verification checks, release process, common pitfalls).
 
 The single public entry point is `OpenAIServingChat._process_messages`; everything else exists to serve it.
 

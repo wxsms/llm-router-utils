@@ -5,7 +5,7 @@ For each retained ``*.py`` file under
 ``src/llm_router_utils/sglang/srt/`` this script locates its counterpart under
 ``vendor/sglang/python/sglang/srt/`` (the git submodule pinned to a
 ``release/vX.Y.Z`` branch) and compares the two after normalizing away the
-slimming transformations documented in ``HOW_TO_UPGRADE.md``:
+slimming transformations documented in ``DEVELOPMENT.md``:
 
 1. Import rewriting — ``from sglang.`` / ``import sglang.`` is rewritten to the
    ``llm_router_utils.sglang.`` dialect on *both* sides so they speak the same
