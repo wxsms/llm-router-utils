@@ -124,6 +124,16 @@ Test assertions must stay byte-identical to upstream, with only these adaptation
 - `from sglang.srt.utils.hf_transformers_utils import get_tokenizer` → `from transformers import AutoTokenizer as _AT; get_tokenizer = lambda name, **kw: _AT.from_pretrained(name, **kw)`
 - `sglang.` → `llm_router_utils.sglang.`
 
+### 6. License attribution (Apache 2.0 §4)
+
+This repo is a derivative work of sglang. When adopting or modifying upstream files:
+
+- **Retain upstream copyright headers** (§4(c)): if an upstream file carries a `# Copyright ... SGLang Team` header, the retained copy must keep it. Do not replace it with a repo-local docstring. Files whose upstream counterpart has no header need not add one.
+- **Mark modified files** (§4(b)): every slimmed (modified) file that carries a header must also carry a "Derivative work: slimmed for llm-router-utils" notice block immediately after the upstream header. Fully-retained files (byte-identical to upstream modulo import rewriting) need no such notice.
+- `LICENSE` and `NOTICE` at repo root must be preserved.
+
+Run `make check-license` to verify (see Step 5).
+
 ## Step 4: Windows Test Adaptation
 
 `tempfile.NamedTemporaryFile` holds an exclusive lock on Windows and cannot be re-opened by name. Tests that read a temporary jinja template must use `mkstemp` instead:
@@ -141,12 +151,25 @@ finally:
 
 ## Step 5: Verify
 
+Run the full verification suite — tests plus the three invariant checks. All must pass before committing the upgrade.
+
 ```bash
 cd /path/to/llm_router_utils
-PYTHONPATH=src python -m pytest test/ -q
+PYTHONPATH=src python -m pytest test/ -q   # 1. regression baseline
+make check-torch                            # 2. no direct torch import
+make check-parity                           # 3. no NEW drift vs upstream
+make check-license                          # 4. Apache 2.0 §4 attribution
 ```
 
 All tests must pass. If upstream changed an implementation (e.g. the inkling_detector rewrite), the corresponding tests must be synced to the new upstream version.
+
+### Torch-import check
+
+```bash
+make check-torch
+```
+
+Verifies the `CLAUDE.md` invariant: no direct `import torch` / `from torch import ...` in `src/`. Torch may only enter transitively via xgrammar's tvm_ffi. If an upstream diff introduces a torch import used only by inference-engine code paths, drop that import (see Step 3, rule 2).
 
 ### Parity check
 
@@ -177,6 +200,20 @@ python scripts/check_parity.py --diff srt/function_call/inkling_detector.py
 python scripts/check_parity.py --show-diffs          # all logic-drift files
 python scripts/check_parity.py --no-baseline         # fail on any drift, ignore baseline
 ```
+
+### License-compliance check
+
+```bash
+make check-license
+```
+
+Verifies the Apache 2.0 §4 redistribution obligations for this derivative work:
+
+- **§4(a)** — `LICENSE` present with the Apache 2.0 header.
+- **§4(c)** — `NOTICE` present and naming sglang as upstream; every retained file whose upstream counterpart carries a SGLang copyright header must retain one. Files whose upstream counterpart has no header are not required to add one (the Apache 2.0 appendix boilerplate is optional, not a §4 obligation).
+- **§4(b)** — every slimmed (modified) file that carries a header must also carry a "Derivative work" notice. The checker reads `scripts/parity_baseline.txt` to know which files are slimmed, so it stays in sync with the parity checker.
+
+When you adopt a new upstream file that carries a header, the checker will flag it if you strip the header (§4(c)) or, for a slimmed file, omit the "Derivative work" notice (§4(b)). Fix by restoring the upstream header and appending the notice block documented in `NOTICE`. See `scripts/check_license.py -v` for a per-file status table.
 
 ## Step 6: Update Version Records
 
