@@ -148,6 +148,36 @@ PYTHONPATH=src python -m pytest test/ -q
 
 All tests must pass. If upstream changed an implementation (e.g. the inkling_detector rewrite), the corresponding tests must be synced to the new upstream version.
 
+### Parity check
+
+After syncing, run the parity checker to catch drift between retained files and the upstream submodule:
+
+```bash
+make check-parity
+```
+
+This diffs every retained `src/llm_router_utils/sglang/srt/**/*.py` against its `vendor/sglang/python/sglang/srt/**` counterpart, normalizing away sanctioned slimming (import rewrites, xgrammar `try/except` guards, `cuda_coredump` import, `Any` in typing imports). It classifies remaining diffs as:
+
+- **match** — byte-identical after normalization (fully-retained files; the goal for detectors, `reasoning_parser.py`, `environ.py`, etc.),
+- **sanctioned slimming** — pure deletions or expected-pattern diffs only,
+- **logic drift** — substantive divergence requiring human review.
+
+Deliberately slimmed files (`serving_chat.py`, `model_config.py`, `template_detection.py`, `server_args.py`, `utils/common.py`, etc.) legitimately show logic drift because of Protocol annotations, deleted methods, and `hf_transformers_utils` → `transformers` substitutions that a generic normalizer cannot safely collapse. Their paths are recorded in `scripts/parity_baseline.txt`. The check **fails only on NEW logic drift** (a regression); baselined files are reported but do not fail the check.
+
+When you legitimately add or remove a slimmed file, regenerate the baseline:
+
+```bash
+make update-parity-baseline
+```
+
+Inspect the diff of `scripts/parity_baseline.txt` before committing — it should only change when the set of slimmed files intentionally changes, never as a side effect of an upgrade. To audit a specific file's diff in full:
+
+```bash
+python scripts/check_parity.py --diff srt/function_call/inkling_detector.py
+python scripts/check_parity.py --show-diffs          # all logic-drift files
+python scripts/check_parity.py --no-baseline         # fail on any drift, ignore baseline
+```
+
 ## Step 6: Update Version Records
 
 1. Update the "Upstream source" line in `README.md` to the new version.

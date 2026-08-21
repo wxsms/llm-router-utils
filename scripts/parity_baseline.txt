@@ -1,0 +1,26 @@
+# Parity baseline: retained files with known logic drift vs upstream.
+# These are deliberately slimmed files (Protocol annotations, deleted
+# methods, hf_transformers_utils -> transformers substitutions, etc.)
+# that require manual review on each upgrade. Regenerate with:
+#   python scripts/check_parity.py --update-baseline
+configs/model_config.py
+connector/__init__.py
+disaggregation/kv_events.py
+entrypoints/openai/serving_base.py
+entrypoints/openai/serving_chat.py
+managers/embed_types.py
+managers/io_struct.py
+managers/tokenizer_manager.py
+mem_cache/utils.py
+observability/metrics_collector.py
+parser/template_detection.py
+parser/template_manager.py
+server_args.py
+tokenizer/tiktoken_tokenizer.py
+utils/__init__.py
+utils/common.py
+utils/hf_transformers/__init__.py
+utils/hf_transformers/common.py
+utils/hf_transformers/config.py
+utils/hf_transformers_patches.py
+utils/runai_utils.py

@@ -1,4 +1,4 @@
-.PHONY: help install test test-unit test-integration build clean lint check-torch
+.PHONY: help install test test-unit test-integration build clean lint check-torch check-parity update-parity-baseline
 
 help:
 	@echo "llm-router-utils — common commands"
@@ -9,6 +9,8 @@ help:
 	@echo "  make test-integration  Run _process_messages integration tests"
 	@echo "  make build          Build wheel + sdist into dist/"
 	@echo "  make check-torch    Verify no direct 'import torch' in src/"
+	@echo "  make check-parity   Diff retained src/ vs vendor/sglang upstream (fail on NEW drift)"
+	@echo "  make update-parity-baseline  Regenerate the known-slimmed drift baseline"
 	@echo "  make clean          Remove build/dist/cache artifacts"
 
 install:
@@ -34,6 +36,14 @@ check-torch:
 	else \
 		echo "OK: no direct torch import in src/"; \
 	fi
+
+check-parity:
+	@echo "Checking retained src/ parity against vendor/sglang upstream..."
+	@python scripts/check_parity.py
+
+update-parity-baseline:
+	@echo "Regenerating parity baseline (known slimmed files)..."
+	@python scripts/check_parity.py --update-baseline
 
 clean:
 	rm -rf build dist *.egg-info src/*.egg-info
