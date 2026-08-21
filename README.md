@@ -84,3 +84,9 @@ The mapping between this repo's releases and upstream sglang versions, so users 
 ## License
 
 Apache 2.0, adapted from [sglang](https://github.com/sgl-project/sglang).
+
+This is a derivative work of sglang. The upstream copyright notice is retained
+in [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE) per Apache 2.0 §4(b)/§4(c).
+Retained source files keep their upstream copyright headers; slimmed files
+carry both the upstream header and a "Derivative work" notice. See
+[`HOW_TO_UPGRADE.md`](HOW_TO_UPGRADE.md) for the trimming rules.
