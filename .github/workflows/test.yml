@@ -27,10 +27,28 @@ jobs:
       - name: Run tests
         run: PYTHONPATH=src python -m pytest test/ --tb=short
 
-      - name: Verify no direct torch import in src/
-        run: |
-          if grep -rn "^import torch\|^from torch" src/ 2>/dev/null | grep -v __pycache__; then
-            echo "FAIL: direct torch import found"
-            exit 1
-          fi
-          echo "OK: no direct torch import"
+  invariants:
+    # Version-independent checks that need the upstream submodule: torch-import
+    # ban, parity against vendor/sglang, and Apache 2.0 license compliance.
+    # Runs once (not on the Python matrix) since these are static checks.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package
+        run: python -m pip install -e ".[test]"
+
+      - name: No direct torch import in src/
+        run: make check-torch
+
+      - name: Parity check (no NEW drift vs upstream)
+        run: make check-parity
+
+      - name: License compliance (Apache 2.0 §4)
+        run: make check-license
