@@ -11,6 +11,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# Derivative work: slimmed for llm-router-utils. See HOW_TO_UPGRADE.md.
+# Original copyright notice retained per Apache 2.0 §4(b)/§4(c).
+# ==============================================================================
 """Hugging Face Transformers utilities.
 
 This package provides HF Transformers helpers, split into submodules

@@ -1,4 +1,4 @@
-.PHONY: help install test test-unit test-integration build clean lint check-torch check-parity update-parity-baseline
+.PHONY: help install test test-unit test-integration build clean lint check-torch check-parity update-parity-baseline check-license
 
 help:
 	@echo "llm-router-utils — common commands"
@@ -11,6 +11,7 @@ help:
 	@echo "  make check-torch    Verify no direct 'import torch' in src/"
 	@echo "  make check-parity   Diff retained src/ vs vendor/sglang upstream (fail on NEW drift)"
 	@echo "  make update-parity-baseline  Regenerate the known-slimmed drift baseline"
+	@echo "  make check-license   Verify Apache 2.0 §4 attribution obligations met"
 	@echo "  make clean          Remove build/dist/cache artifacts"
 
 install:
@@ -44,6 +45,10 @@ check-parity:
 update-parity-baseline:
 	@echo "Regenerating parity baseline (known slimmed files)..."
 	@python scripts/check_parity.py --update-baseline
+
+check-license:
+	@echo "Checking Apache 2.0 license compliance..."
+	@python scripts/check_license.py
 
 clean:
 	rm -rf build dist *.egg-info src/*.egg-info
