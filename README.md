@@ -4,8 +4,6 @@ Lightweight extraction of sglang's reasoning parser, tool-call parser, and chat 
 
 This library does **not** include any inference engine code. It only provides the "frontend" message processing pipeline: `OpenAIServingChat._process_messages` and its dependencies.
 
-**Upstream source:** sglang [release/v0.5.18](https://github.com/sgl-project/sglang/tree/release/v0.5.18).
-
 ## Installation
 
 ```bash
