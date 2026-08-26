@@ -4,7 +4,7 @@ Lightweight extraction of sglang's reasoning parser, tool-call parser, and chat 
 
 This library does **not** include any inference engine code. It only provides the "frontend" message processing pipeline: `OpenAIServingChat._process_messages` and its dependencies.
 
-**Upstream source:** sglang [release/v0.5.17](https://github.com/sgl-project/sglang/tree/release/v0.5.17).
+**Upstream source:** sglang [release/v0.5.18](https://github.com/sgl-project/sglang/tree/release/v0.5.18).
 
 ## Installation
 
@@ -54,7 +54,7 @@ Migrated modules under `llm_router_utils/sglang/srt/` (paths preserved from upst
 | Module | Description |
 |---|---|
 | `parser/` | Conversation templates (~50 model families), `ReasoningParser` + detectors, harmony/inkling, jinja utils, template detection, `TemplateManager` with `TokenizerLike` Protocol |
-| `function_call/` | `FunctionCallParser` + 33 detectors (hermes, glm, deepseek, qwen, kimi, mistral, …), `JsonArrayParser`, schema utils |
+| `function_call/` | `FunctionCallParser` + 34 detectors (hermes, glm, deepseek, qwen, kimi, mistral, muse-glimmer, …), `JsonArrayParser`, schema utils |
 | `entrypoints/openai/` | `protocol.py` (~1900 lines, full OpenAI types), slimmed `serving_chat.py` (only `_process_messages` chain), `serving_base.py`, `chat_encoding.py`, `encoding_dsv32/dsv4.py`, `sse_utils.py`, `usage_processor.py`, `utils.py` |
 | `managers/` | Slimmed `TokenizerManager` (uses upstream `get_tokenizer` for byte-parity incl. `SGLANG_PATCH_TOKENIZER`), slimmed `io_struct.py`, `embed_types.py` stub |
 | `configs/` | Slimmed `ModelConfig` (uses upstream `get_config`; exposes `hf_config`/`is_multimodal`/`get_default_sampling_params`/`context_length`), `model_config_parser_registry.py` |
@@ -78,6 +78,7 @@ The mapping between this repo's releases and upstream sglang versions, so users 
 |---|---|
 | `v0.2.2` | [v0.5.16](https://github.com/sgl-project/sglang/tree/release/v0.5.16) |
 | `v0.3.0` | [v0.5.17](https://github.com/sgl-project/sglang/tree/release/v0.5.17) |
+| `v0.4.0` | [v0.5.18](https://github.com/sgl-project/sglang/tree/release/v0.5.18) |
 
 > See [DEVELOPMENT.md](DEVELOPMENT.md) for the development workflow (upgrades, checks, releases).
 

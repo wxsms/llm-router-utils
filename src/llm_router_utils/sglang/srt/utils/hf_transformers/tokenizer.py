@@ -11,6 +11,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# Derivative work: slimmed for llm-router-utils. See DEVELOPMENT.md.
+# Original copyright notice retained per Apache 2.0 §4(b)/§4(c).
+# ==============================================================================
 """Tokenizer loading utilities."""
 
 import json
@@ -34,6 +37,7 @@ from .common import (
     _resolve_local_or_cached_file,
     attach_additional_stop_token_ids,
     check_gguf_file,
+    gguf_sidecar_dir,
     resolve_runai_obj_uri,
 )
 from .mistral_utils import (
@@ -130,6 +134,15 @@ class TokenizerWarningsFilter(logging.Filter):
         return "Calling super().encode with" not in record.getMessage()
 
 
+_tokenizer_warnings_filter = TokenizerWarningsFilter()
+
+
+def _install_tokenizer_warnings_filter(tokenizer):
+    logging.getLogger(tokenizer.__class__.__module__).addFilter(
+        _tokenizer_warnings_filter
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helpers for get_tokenizer
 # ---------------------------------------------------------------------------
@@ -144,7 +157,8 @@ def _resolve_tokenizer_name(tokenizer_name, kwargs):
 
     if check_gguf_file(tokenizer_name):
         _ensure_gguf_version()
-        kwargs["gguf_file"] = tokenizer_name
+        if gguf_sidecar_dir(tokenizer_name, "tokenizer_config.json") is None:
+            kwargs["gguf_file"] = tokenizer_name
         tokenizer_name = Path(tokenizer_name).parent
 
     tokenizer_name = resolve_runai_obj_uri(tokenizer_name)
@@ -165,9 +179,6 @@ def _auto_tokenizer_from_pretrained(tokenizer_name, *args, **common_kwargs):
     try:
         tokenizer = AutoTokenizer.from_pretrained(
             tokenizer_name, *args, **common_kwargs
-        )
-        logging.getLogger(tokenizer.__class__.__module__).addFilter(
-            TokenizerWarningsFilter()
         )
         return tokenizer
     except TypeError as e:
@@ -416,6 +427,7 @@ def _fix_special_tokens_pattern(tokenizer):
 
 def _apply_post_load_fixes(tokenizer, tokenizer_name, revision):
     """Apply all post-load patches and return the final tokenizer."""
+    _install_tokenizer_warnings_filter(tokenizer)
     _fix_v5_tokenizer_components(tokenizer, tokenizer_name, revision)
     _fix_v5_add_bos_eos_token(tokenizer, tokenizer_name, revision)
 

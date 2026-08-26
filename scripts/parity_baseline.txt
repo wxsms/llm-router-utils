@@ -6,6 +6,7 @@
 configs/model_config.py
 connector/__init__.py
 disaggregation/kv_events.py
+entrypoints/openai/protocol.py
 entrypoints/openai/serving_base.py
 entrypoints/openai/serving_chat.py
 managers/embed_types.py
@@ -22,5 +23,6 @@ utils/common.py
 utils/hf_transformers/__init__.py
 utils/hf_transformers/common.py
 utils/hf_transformers/config.py
+utils/hf_transformers/tokenizer.py
 utils/hf_transformers_patches.py
 utils/runai_utils.py

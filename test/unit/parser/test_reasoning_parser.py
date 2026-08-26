@@ -154,11 +154,14 @@ class TestBaseReasoningFormatDetector(unittest.TestCase):
         self.assertEqual(detector._buffer, "")
         self.assertEqual(detector.finish().reasoning_text, "")
 
-    def test_finish_drops_partial_end_tag_when_streaming_reasoning(self):
-        """With stream_reasoning=True the reasoning is emitted chunk by chunk, so
-        finish() must not re-emit. Only a partial end-tag fragment can linger in
-        _buffer; that fragment is an incomplete token, not content, and must be
-        dropped rather than surfaced as reasoning."""
+    def test_finish_flushes_partial_end_tag_when_streaming_reasoning(self):
+        """With stream_reasoning=True everything in _buffer at the end of the
+        stream is a trailing slice that was held back precisely because it could
+        still have grown into `</think>`, so it was never emitted. Since the
+        stream ended it never became a token, and dropping it would lose content
+        whose only crime is looking like the start of one -- reasoning ending in
+        a literal `<` is the common case. Flushing matches stream_reasoning=False
+        and the non-streaming path, which both keep it."""
         detector = BaseReasoningFormatDetector(
             "<think>", "</think>", stream_reasoning=True
         )
@@ -168,8 +171,11 @@ class TestBaseReasoningFormatDetector(unittest.TestCase):
         )
         self.assertEqual(detector.parse_streaming_increment("</thi").reasoning_text, "")
         end = detector.finish()
-        self.assertEqual(end.reasoning_text, "")
+        self.assertEqual(end.reasoning_text, "</thi")
         self.assertEqual(end.normal_text, "")
+        # State is cleared, so a second finish() is a no-op.
+        self.assertEqual(detector._buffer, "")
+        self.assertEqual(detector.finish().reasoning_text, "")
 
 
 class TestDeepSeekR1Detector(unittest.TestCase):
@@ -414,13 +420,12 @@ class TestGlm45Detector(unittest.TestCase):
         self.assertEqual(result.reasoning_text, "")
         self.assertEqual(result.normal_text, "")
 
-        # Tool interruption should still work - flushes buffered reasoning.
-        # Note: when stream_reasoning=False, the <think> tag is stripped from the
-        # local `current_text` variable but NOT from `self._buffer` (which is never
-        # cleared in the non-streaming path). So the flushed reasoning content
-        # includes the raw <think> tag.
+        # Tool interruption should still work - flushes buffered reasoning. The
+        # opening tag is stripped from `self._buffer` as well as from the local
+        # view, so the flush matches detect_and_parse instead of carrying the raw
+        # <think> tag into reasoning_content.
         result = detector.parse_streaming_increment("<tool_call>tool call")
-        self.assertEqual(result.reasoning_text, "<think>thinking")
+        self.assertEqual(result.reasoning_text, "thinking")
         self.assertEqual(result.normal_text, "<tool_call>tool call")
 
     def test_streaming_empty_reasoning_with_tool(self):
