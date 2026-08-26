@@ -39,6 +39,7 @@ from .common import (
     get_rope_config,
     get_sparse_attention_config,
     get_tokenizer_from_processor,
+    resolve_hf_gguf_reference,
 )
 from .config import get_config
 from .tokenizer import (
@@ -64,4 +65,5 @@ __all__ = [
     "get_tokenizer",
     "get_tokenizer_from_processor",
     "normalize_rope_scaling_compat",
+    "resolve_hf_gguf_reference",
 ]

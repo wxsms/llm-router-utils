@@ -20,7 +20,11 @@ class ThinkingMode(str, Enum):
 import jinja2
 import orjson
 
-from llm_router_utils.sglang.srt.entrypoints.openai import encoding_dsv4, encoding_dsv32
+from llm_router_utils.sglang.srt.entrypoints.openai import (
+    chat_encoding,
+    encoding_dsv4,
+    encoding_dsv32,
+)
 from llm_router_utils.sglang.srt.entrypoints.openai.protocol import (
     ChatCompletionMessageGenericParam,
     ChatCompletionRequest,
@@ -227,6 +231,17 @@ class OpenAIServingChat(OpenAIServingBase):
         # Which Python-based chat encoder (if any) bypasses apply_chat_template.
         # Values: "dsv32", "dsv4", or custom values set by subclass. None for default.
         self.chat_encoding_spec = self._resolve_chat_encoding_spec()
+        self._dsv4_reasoning_effort_profile = (
+            chat_encoding.resolve_dsv4_reasoning_effort_profile(
+                model_path=self.tokenizer_manager.model_path,
+                revision=self.tokenizer_manager.server_args.revision,
+                override=self.tokenizer_manager.model_config.hf_config.to_dict().get(
+                    chat_encoding.DSV4_REASONING_EFFORT_PROFILE_OVERRIDE
+                ),
+            )
+            if self.chat_encoding_spec == "dsv4"
+            else None
+        )
 
         # Resolve the env-configured Inkling effort default once: the env var is
         # frozen for the server's lifetime, and a misconfigured value should
@@ -313,11 +328,7 @@ class OpenAIServingChat(OpenAIServingBase):
 
         Override in subclass to add custom encoding specs.
         """
-        from llm_router_utils.sglang.srt.entrypoints.openai.chat_encoding import (
-            resolve_chat_encoding_spec,
-        )
-
-        return resolve_chat_encoding_spec(
+        return chat_encoding.resolve_chat_encoding_spec(
             hf_config=self.tokenizer_manager.model_config.hf_config,
             tokenizer=self.tokenizer_manager.tokenizer,
             tool_call_parser=self.tool_call_parser,
@@ -709,6 +720,7 @@ class OpenAIServingChat(OpenAIServingBase):
 
         result.tool_call_constraint = tool_call_constraint
         result.require_reasoning = thinking_mode
+        result.skip_special_tokens = request.skip_special_tokens
         return result
 
     def _continuous_usage_cached_details(
@@ -760,15 +772,25 @@ class OpenAIServingChat(OpenAIServingBase):
             parser = FunctionCallParser(
                 tools, self.tool_call_parser, tokenizer=self.tokenizer_manager.tokenizer
             )
-            should_try_parser = (
-                not is_required
-                or parser.detector.supports_structural_tag()
+            detector_owns_format = (
+                parser.detector.supports_structural_tag()
                 or parser.detector.parses_required_natively()
             )
+            should_try_parser = not is_required or detector_owns_format
             if should_try_parser and parser.has_tool_call(text):
                 try:
                     text, call_info_list = parser.parse_non_stream(text)
                     if not call_info_list:
+                        logger.warning(
+                            "Tool call marker present but no complete call parsed "
+                            "from %s output; dropping the incomplete call",
+                            self.tool_call_parser,
+                        )
+                        logger.debug(
+                            "Unparsed tool call output (%d chars): %r",
+                            len(text),
+                            text[:2000],
+                        )
                         return ToolCallProcessingResult(None, text, finish_reason)
 
                     tool_calls = []
@@ -794,6 +816,15 @@ class OpenAIServingChat(OpenAIServingBase):
                     logger.error(f"Tool call parsing error: {e}")
                     return ToolCallProcessingResult(None, text, finish_reason)
 
+            if is_required and detector_owns_format:
+                logger.warning(
+                    "Required tool call missing from %s output (%d chars)",
+                    self.tool_call_parser,
+                    len(text),
+                )
+                logger.debug("Unparsed required tool call output: %r", text[:2000])
+                return ToolCallProcessingResult(None, text, finish_reason)
+
         # json_schema constraint → JSON array output for required/named
         if is_required:
             original_finish_type = finish_reason["type"]
@@ -802,12 +833,28 @@ class OpenAIServingChat(OpenAIServingBase):
                 finish_reason["matched"] = None
             try:
                 tool_call_data = orjson.loads(text)
+                if isinstance(tool_call_data, dict):
+                    tool_call_data = [tool_call_data]
+                if not isinstance(tool_call_data, list):
+                    raise ValueError(
+                        "expected a JSON array of tool calls, got "
+                        f"{type(tool_call_data).__name__}"
+                    )
+                if not all(
+                    isinstance(tool, dict) and "name" in tool for tool in tool_call_data
+                ):
+                    raise ValueError(
+                        "every tool call must be a JSON object with a 'name'"
+                    )
                 tool_calls = []
                 for i, tool in enumerate(tool_call_data):
+                    parameters = json.dumps(
+                        tool.get("parameters", {}), ensure_ascii=False
+                    )
                     call_info = ToolCallItem(
                         tool_index=i,
                         name=tool["name"],
-                        parameters=json.dumps(tool["parameters"], ensure_ascii=False),
+                        parameters=parameters,
                     )
                     tool_id = self._process_tool_call_id(
                         call_info, history_tool_calls_cnt
@@ -818,15 +865,14 @@ class OpenAIServingChat(OpenAIServingBase):
                             index=i,
                             function=FunctionResponse(
                                 name=tool["name"],
-                                arguments=json.dumps(
-                                    tool["parameters"], ensure_ascii=False
-                                ),
+                                arguments=parameters,
                             ),
                         )
                     )
                 return ToolCallProcessingResult(tool_calls, "", finish_reason)
             except Exception as e:
                 logger.error(f"Tool call parsing error: {e}")
+                logger.debug("Unparsed required tool call output: %r", text[:2000])
                 finish_reason["type"] = original_finish_type
                 return ToolCallProcessingResult(None, text, finish_reason)
 
@@ -861,8 +907,13 @@ class OpenAIServingChat(OpenAIServingBase):
         request: ChatCompletionRequest,
         has_tool_calls: Dict[int, bool],
         continuous_usage_stats: bool = False,
+        flush: bool = False,
     ):
-        """Process tool calls in streaming response"""
+        """Process tool calls in streaming response.
+
+        With flush=True (the terminal delta), the parser also drains text it
+        held back waiting for a marker that can no longer arrive.
+        """
         if index not in parser_dict:
             is_required = request.tool_choice == "required" or isinstance(
                 request.tool_choice, ToolChoice
@@ -900,6 +951,10 @@ class OpenAIServingChat(OpenAIServingBase):
             normal_text, calls = result.normal_text, result.calls
         else:
             normal_text, calls = parser.parse_stream_chunk(delta)
+            if flush:
+                end_text, end_calls = parser.parse_stream_end()
+                normal_text = (normal_text or "") + end_text
+                calls = list(calls) + end_calls
 
         # Yield normal text
         if normal_text:
@@ -1148,16 +1203,18 @@ class OpenAIServingChat(OpenAIServingBase):
 
             # Default encoding (dsv4/dsv32)
             if self.chat_encoding_spec == "dsv4":
-                # V4 encoder only accepts "max" / "high" / None.
-                # OpenAI protocol defaults to "medium" which V4 rejects; drop it.
-                # Fallback: if request didn't set it, try env SGLANG_DSV4_REASONING_EFFORT.
                 effort_source = request.reasoning_effort
                 if effort_source is None:
                     env_val = envs.SGLANG_DSV4_REASONING_EFFORT.get()
                     if env_val:
                         effort_source = env_val
+                reasoning_effort_profile = self._dsv4_reasoning_effort_profile
+                assert reasoning_effort_profile is not None
+                accepted_efforts = encoding_dsv4.REASONING_EFFORT_PROFILES[
+                    reasoning_effort_profile
+                ]
                 v4_reasoning_effort = (
-                    effort_source if effort_source in ("max", "high") else None
+                    effort_source if effort_source in accepted_efforts else None
                 )
                 if request.task is not None:
                     encoding_dsv4.attach_task_to_last_user_message(
@@ -1167,6 +1224,7 @@ class OpenAIServingChat(OpenAIServingBase):
                     messages,
                     thinking_mode=thinking_mode,
                     reasoning_effort=v4_reasoning_effort,
+                    reasoning_effort_profile=reasoning_effort_profile,
                 )
                 prompt_ids = self.tokenizer_manager.tokenizer.encode(real_input)
             else:
@@ -1385,6 +1443,8 @@ class OpenAIServingChat(OpenAIServingBase):
             request.skip_special_tokens = False
         elif self.reasoning_parser == "inkling":
             request.skip_special_tokens = False
+        elif self.reasoning_parser == "muse":
+            request.skip_special_tokens = False
 
     def wrap_reasoning_history(self, reasoning_text: str) -> str:
         """Wrap prior-turn reasoning in the detector's own start/end tokens.
@@ -1446,6 +1506,12 @@ class OpenAIServingChat(OpenAIServingBase):
         if self.reasoning_parser == "hunyuan":
             request.reasoning_effort = "medium" if enabled else "no_think"
             return
+
+        if self.reasoning_parser == "inkling":
+            # Effort-conditioned, not toggled: "none" (0.0) is the off switch.
+            if not enabled:
+                request.reasoning_effort = "none"
+                return
 
         config = self.template_manager.reasoning_config
         is_mistral = (config is not None and config.special_case == "mistral") or (
