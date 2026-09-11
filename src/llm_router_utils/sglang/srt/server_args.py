@@ -36,6 +36,11 @@ class ServerArgs:
     model_path: str
     tokenizer_path: Optional[str] = None
     chat_template: Optional[str] = None
+    # When the HuggingFace tokenizer has multiple chat templates (e.g.,
+    # 'default', 'tool_use', 'rag'), specify which named template to use.
+    # If not set, the first available template is used.
+    # Read by TemplateManager._select_named_template.
+    hf_chat_template_name: Optional[str] = None
     served_model_name: Optional[str] = None
     tool_call_parser: Optional[str] = None
     reasoning_parser: Optional[str] = None

@@ -34,7 +34,8 @@ class TokenizerManager:
     """Minimal TokenizerManager that loads a tokenizer + model config.
 
     Mirrors the public surface used by OpenAIServingChat._process_messages:
-    exposes ``.tokenizer``, ``.processor``, ``.model_config``, ``.server_args``.
+    exposes ``.tokenizer``, ``.processor``, ``.model_config``, ``.model_path``,
+    ``.server_args``.
     """
 
     def __init__(self, server_args: ServerArgs, port_args: PortArgs):
@@ -49,6 +50,10 @@ class TokenizerManager:
             self.init_tokenizer_and_processor()
 
     def init_model_config(self) -> None:
+        # Upstream sets self.model_path in init_model_config (from get_model());
+        # here it is simply server_args.model_path. serving_chat.py reads
+        # tokenizer_manager.model_path for the DSV4 reasoning-effort profile.
+        self.model_path = self.server_args.model_path
         self.model_config = ModelConfig(
             model_path=self.server_args.model_path,
             trust_remote_code=self.server_args.trust_remote_code,
