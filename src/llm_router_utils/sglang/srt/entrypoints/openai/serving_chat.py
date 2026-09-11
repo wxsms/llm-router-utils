@@ -20,6 +20,18 @@ class ThinkingMode(str, Enum):
 import jinja2
 import orjson
 
+try:
+    from mistral_common.exceptions import MistralCommonException
+
+    _MISTRAL_COMMON_ERRORS: tuple[type[BaseException], ...] = (MistralCommonException,)
+except ImportError:
+    _MISTRAL_COMMON_ERRORS = ()
+
+_CHAT_TEMPLATE_CLIENT_ERRORS: tuple[type[BaseException], ...] = (
+    jinja2.TemplateError,
+    TypeError,
+) + _MISTRAL_COMMON_ERRORS
+
 from llm_router_utils.sglang.srt.entrypoints.openai import (
     chat_encoding,
     encoding_dsv4,
@@ -1326,7 +1338,7 @@ class OpenAIServingChat(OpenAIServingBase):
                     prompt_ids = self.tokenizer_manager.tokenizer.encode(
                         rendered_prompt, **encode_kwargs
                     )
-                except (jinja2.TemplateError, TypeError) as template_error:
+                except _CHAT_TEMPLATE_CLIENT_ERRORS as template_error:
                     # Template errors (e.g., from raise_exception in Jinja templates)
                     # and TypeError (e.g., tojson filter on Jinja2 Undefined variables)
                     # should be treated as client errors (400 BadRequest)
@@ -1445,6 +1457,13 @@ class OpenAIServingChat(OpenAIServingBase):
             request.skip_special_tokens = False
         elif self.reasoning_parser == "muse":
             request.skip_special_tokens = False
+
+    def supports_native_reasoning_history(self) -> bool:
+        """Whether the chat encoder takes history as ``reasoning_content`` rather
+        than via :meth:`wrap_reasoning_history`; see
+        :func:`chat_encoding.spec_owns_reasoning_history` for why.
+        """
+        return chat_encoding.spec_owns_reasoning_history(self.chat_encoding_spec)
 
     def wrap_reasoning_history(self, reasoning_text: str) -> str:
         """Wrap prior-turn reasoning in the detector's own start/end tokens.
