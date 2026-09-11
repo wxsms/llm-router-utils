@@ -665,12 +665,13 @@ def _log_undetected_parser(attr: str, label: str) -> None:
 
 def _architecture_auto_parsers(server_args, needs: Tuple[str, ...]) -> Dict[str, str]:
     """The parsers the model architecture implies, for the fields still on auto."""
-    from transformers import AutoConfig
+    from llm_router_utils.sglang.srt.utils.hf_transformers import get_config
 
-    config = AutoConfig.from_pretrained(
+    config = get_config(
         server_args.model_path,
         trust_remote_code=server_args.trust_remote_code,
         revision=getattr(server_args, "revision", None),
+        model_config_parser=getattr(server_args, "model_config_parser", "auto"),
     )
     architectures = getattr(config, "architectures", None) or []
     arch = architectures[0] if architectures else ""
@@ -701,12 +702,11 @@ def _architecture_auto_parsers(server_args, needs: Tuple[str, ...]) -> Dict[str,
 
 def resolve_auto_parsers(server_args) -> None:
     """Resolve ``--reasoning-parser=auto`` / ``--tool-call-parser=auto`` from the
-    chat template, in place, before anything publishes ``server_args``.
+    chat template, before anything publishes ``server_args``.
 
-    Performs a lightweight tokenizer load, so it runs once in engine init. In
-    place because everyone who holds this instance must see the resolved value:
-    the schedulers it forks, the HTTP server, and the tokenizer workers it is
-    serialized for.
+    Performs a lightweight tokenizer load, so it runs once in engine init. The
+    decision is applied to this instance so every holder of it carries it --
+    the HTTP server and the tokenizer workers it is serialized for.
     """
     needs = tuple(
         attr
@@ -716,7 +716,7 @@ def resolve_auto_parsers(server_args) -> None:
     if not needs:
         return
 
-    from transformers import AutoTokenizer
+    from llm_router_utils.sglang.srt.utils.hf_transformers import get_tokenizer
 
     chat_template_arg = getattr(server_args, "chat_template", None)
     try:
@@ -730,7 +730,7 @@ def resolve_auto_parsers(server_args) -> None:
 
     tokenizer = None
     try:
-        tokenizer = AutoTokenizer.from_pretrained(
+        tokenizer = get_tokenizer(
             server_args.model_path,
             trust_remote_code=server_args.trust_remote_code,
         )

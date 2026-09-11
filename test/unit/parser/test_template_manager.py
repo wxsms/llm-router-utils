@@ -26,14 +26,11 @@ class _DummyTokenizer:
 
 
 def _patch_hf_transformers_utils(get_tokenizer, get_config=None):
-    # In llm-router-utils, template_detection.py uses transformers.AutoTokenizer
-    # and AutoConfig directly. Patch those at the transformers module so that
-    # code calling from transformers import AutoTokenizer gets the mock.
+    # template_detection.py imports get_tokenizer / get_config from the
+    # repo's hf_transformers shim (upstream: hf_transformers_utils). Patch
+    # them at that module so the function-local imports pick up the mocks.
     patches = []
-    if get_config is not None:
-        patches.append(patch("transformers.AutoConfig.from_pretrained", side_effect=get_config))
-    patches.append(patch("transformers.AutoTokenizer.from_pretrained", side_effect=get_tokenizer))
-    module = ModuleType("llm_router_utils.sglang.srt.utils.hf_transformers_utils")
+    module = ModuleType("llm_router_utils.sglang.srt.utils.hf_transformers")
     module.get_tokenizer = get_tokenizer
     if get_config is not None:
         module.get_config = get_config
