@@ -79,6 +79,7 @@ The mapping between this repo's releases and upstream sglang versions, so users 
 | `v0.4.0` | [v0.5.18](https://github.com/sgl-project/sglang/tree/release/v0.5.18) |
 | `v0.5.0` | [v0.5.19](https://github.com/sgl-project/sglang/tree/release/v0.5.19) |
 | `v0.5.1` | [v0.5.19](https://github.com/sgl-project/sglang/tree/release/v0.5.19) |
+| `v0.6.0` | [v0.5.20](https://github.com/sgl-project/sglang/tree/release/v0.5.20) |
 
 > See [DEVELOPMENT.md](DEVELOPMENT.md) for the development workflow (upgrades, checks, releases).
 

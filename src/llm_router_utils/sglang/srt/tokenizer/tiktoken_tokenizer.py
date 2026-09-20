@@ -76,9 +76,7 @@ class TiktokenTokenizer:
             self,
             text: str,
             *,
-            allowed_special: Union[
-                Literal["all"], AbstractSet[str]
-            ] = set(),  # noqa: B006
+            allowed_special: Union[Literal["all"], AbstractSet[str]] = set(),  # noqa: B006
             disallowed_special: Union[Literal["all"], Collection[str]] = "all",
         ) -> List[int]:
             if isinstance(allowed_special, set):
@@ -111,8 +109,9 @@ class TiktokenTokenizer:
         # returns before attach_additional_stop_token_ids() runs, so register
         # them here from the same shared list (resolved against the special
         # tokens, as with EOS above); otherwise generation runs to max_tokens.
-        # Inlined from sglang.srt.utils.hf_transformers.common._ADDITIONAL_STOP_TOKEN_TEXTS
-        _ADDITIONAL_STOP_TOKEN_TEXTS = ("<|eom_id|>", "<|content_model_end_sampling|>")
+        from llm_router_utils.sglang.srt.utils.hf_transformers.common import (
+            _ADDITIONAL_STOP_TOKEN_TEXTS,
+        )
 
         stop_ids = {
             tokenizer._special_tokens[text]

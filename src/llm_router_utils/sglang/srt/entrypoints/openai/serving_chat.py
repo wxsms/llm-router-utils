@@ -6,6 +6,7 @@ import logging
 import math
 import time
 import uuid
+from collections import OrderedDict
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
@@ -62,7 +63,14 @@ from llm_router_utils.sglang.srt.function_call.utils import (
     get_json_schema_constraint,
 )
 from llm_router_utils.sglang.srt.parser.conversation import generate_chat_conv
-from llm_router_utils.sglang.srt.parser.jinja_template_utils import process_content_for_template_format
+from llm_router_utils.sglang.srt.parser.hunyuan_reasoning import (
+    normalize_hunyuan_reasoning_effort,
+    uses_hunyuan_reasoning_effort,
+)
+from llm_router_utils.sglang.srt.parser.jinja_template_utils import (
+    MEDIA_URL_PART_TYPES,
+    process_content_for_template_format,
+)
 from llm_router_utils.sglang.srt.parser.reasoning_parser import ReasoningParser
 
 if TYPE_CHECKING:
@@ -72,6 +80,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _MEDIA_CONTENT_PART_TYPES = frozenset({"image_url", "video_url", "audio_url"})
+_CHAT_TEMPLATE_CACHE_MAX_SIZE = 128
 
 
 def normalize_tool_content(role: str, content):
@@ -278,6 +287,9 @@ class OpenAIServingChat(OpenAIServingBase):
             )
         except Exception:
             self._tokenizer_auto_adds_specials = True
+        self._chat_template_cache: OrderedDict[
+            bytes, tuple[str, tuple[int, ...], str]
+        ] = OrderedDict()
 
     def _handle_last_assistant_message(
         self,
@@ -627,6 +639,66 @@ class OpenAIServingChat(OpenAIServingBase):
             )
         return parsed
 
+    @staticmethod
+    def _sort_tool_message_run(
+        run: List[Dict[str, Any]], tool_calls: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Order a tool-message run by tool_call position.
+
+        Templates that associate results by tool_call_id render the run in
+        tool_calls order; sorting the run upfront keeps extraction order and
+        placeholder order the same. Runs the template itself would refuse to
+        associate (missing/duplicate/unknown ids) are left untouched, as are
+        text-only runs, whose order text-only templates may rely on.
+        """
+        if len(run) < 2:
+            return run
+        call_ids = [tc.get("id") for tc in tool_calls]
+        if any(call_id is None for call_id in call_ids) or len(set(call_ids)) != len(
+            call_ids
+        ):
+            return run
+        result_ids = [message.get("tool_call_id") for message in run]
+        if any(result_id not in call_ids for result_id in result_ids) or len(
+            set(result_ids)
+        ) != len(result_ids):
+            return run
+        has_media = any(
+            isinstance(message.get("content"), list)
+            and any(
+                isinstance(part, dict) and part.get("type") in MEDIA_URL_PART_TYPES
+                for part in message["content"]
+            )
+            for message in run
+        )
+        if not has_media:
+            return run
+        position = {call_id: index for index, call_id in enumerate(call_ids)}
+        return sorted(run, key=lambda message: position[message["tool_call_id"]])
+
+    @classmethod
+    def _canonicalize_tool_message_order(
+        cls, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        canonical = []
+        index = 0
+        while index < len(messages):
+            message = messages[index]
+            canonical.append(message)
+            index += 1
+            tool_calls = message.get("tool_calls") or []
+            if message.get("role") != "assistant" or not tool_calls:
+                continue
+            run = []
+            while index < len(messages) and messages[index].get("role") in (
+                "tool",
+                "function",
+            ):
+                run.append(messages[index])
+                index += 1
+            canonical.extend(cls._sort_tool_message_run(run, tool_calls))
+        return canonical
+
     def _process_messages(
         self, request: ChatCompletionRequest, is_multimodal: bool
     ) -> MessageProcessingResult:
@@ -639,6 +711,10 @@ class OpenAIServingChat(OpenAIServingBase):
             effort = ctk.get("reasoning_effort")
             if effort is not None and request.reasoning_effort is None:
                 request.reasoning_effort = effort
+
+        normalize_hunyuan_reasoning_effort(
+            request, self.reasoning_parser, self.template_manager.reasoning_config
+        )
 
         # GptOss model needs to keep special tokens for harmony parsing
         if self.is_gpt_oss or self.is_gemma4:
@@ -658,8 +734,23 @@ class OpenAIServingChat(OpenAIServingBase):
         # Apply chat template and its stop strings
         tools = None
         tool_call_stop = None
-        required_parsed_natively = False
         effective_tools = self._effective_tools(request)
+        glm_constraint = self.tool_call_parser == "glm47" and not any(
+            tool.function.strict for tool in effective_tools
+        )
+        if glm_constraint:
+            enable_thinking = (request.chat_template_kwargs or {}).get(
+                "enable_thinking"
+            )
+            parser = FunctionCallParser(request.tools or [], self.tool_call_parser)
+            tool_call_constraint = parser.get_structure_constraint(
+                request.tool_choice,
+                parallel_tool_calls=request.parallel_tool_calls,
+                thinking_mode=True
+                if enable_thinking is None
+                else bool(enable_thinking),
+            )
+        required_parsed_natively = glm_constraint
         if effective_tools and request.tool_choice != "none":
             request.skip_special_tokens = False
             if not isinstance(request.tool_choice, str):
@@ -670,7 +761,7 @@ class OpenAIServingChat(OpenAIServingBase):
                 ] or None
             elif request.tools:
                 tools = [item.model_dump() for item in request.tools]
-            if self.tool_call_parser:
+            if self.tool_call_parser and not glm_constraint:
                 parser = FunctionCallParser(
                     effective_tools,
                     self.tool_call_parser,
@@ -733,6 +824,31 @@ class OpenAIServingChat(OpenAIServingBase):
         result.tool_call_constraint = tool_call_constraint
         result.require_reasoning = thinking_mode
         result.skip_special_tokens = request.skip_special_tokens
+        if self.reasoning_parser == "k2_horizon" and thinking_mode:
+            parser = ReasoningParser(
+                model_type=self.reasoning_parser,
+                stream_reasoning=False,
+                force_reasoning=True,
+                request=request,
+                tokenizer=self.tokenizer_manager.tokenizer,
+            )
+            token_ids = self.tokenizer_manager.tokenizer.encode(
+                parser.detector.think_end_token,
+                add_special_tokens=False,
+            )
+            if hasattr(token_ids, "tolist"):
+                token_ids = token_ids.tolist()
+            if (
+                not isinstance(token_ids, list)
+                or not token_ids
+                or any(
+                    type(token_id) is not int or token_id < 0 for token_id in token_ids
+                )
+            ):
+                raise ValueError(
+                    "The selected K2 reasoning terminator could not be encoded"
+                )
+            result.reasoning_end_token_ids = list(token_ids)
         return result
 
     def _continuous_usage_cached_details(
@@ -1134,6 +1250,7 @@ class OpenAIServingChat(OpenAIServingBase):
         """Apply Jinja chat template"""
         prompt = ""
         prompt_ids = []
+        decoded_prompt = None
         openai_compatible_messages = []
         image_data = []
         video_data = []
@@ -1251,6 +1368,8 @@ class OpenAIServingChat(OpenAIServingBase):
                     prompt_ids, assistant_prefix
                 )
         else:
+            if self.template_manager.jinja_template_may_reorder_tool_results:
+                messages = self._canonicalize_tool_message_order(messages)
             for msg_dict in copy.deepcopy(messages):
                 if msg_dict.get("content") is None:
                     msg_dict["content"] = ""
@@ -1305,16 +1424,14 @@ class OpenAIServingChat(OpenAIServingBase):
                 else {}
             )
             try:
-                rendered_prompt = self.tokenizer_manager.tokenizer.apply_chat_template(
-                    openai_compatible_messages,
-                    tokenize=False,
-                    add_generation_prompt=True,
-                    tools=tools,
-                    return_dict=False,
-                    **extra_template_kwargs,
-                )
-                prompt_ids = self.tokenizer_manager.tokenizer.encode(
-                    rendered_prompt, **encode_kwargs
+                rendered_prompt, prompt_ids, decoded_prompt = (
+                    self._render_and_encode_chat_template(
+                        openai_compatible_messages,
+                        tools=tools,
+                        template_kwargs=extra_template_kwargs,
+                        encode_kwargs=encode_kwargs,
+                        use_cache=is_multimodal,
+                    )
                 )
             except Exception:
                 # If the first attempt fails, try with flat function-only format.
@@ -1325,18 +1442,14 @@ class OpenAIServingChat(OpenAIServingBase):
                     else None
                 )
                 try:
-                    rendered_prompt = (
-                        self.tokenizer_manager.tokenizer.apply_chat_template(
+                    rendered_prompt, prompt_ids, decoded_prompt = (
+                        self._render_and_encode_chat_template(
                             openai_compatible_messages,
-                            tokenize=False,
-                            add_generation_prompt=True,
                             tools=tools,
-                            return_dict=False,
-                            **extra_template_kwargs,
+                            template_kwargs=extra_template_kwargs,
+                            encode_kwargs=encode_kwargs,
+                            use_cache=is_multimodal,
                         )
-                    )
-                    prompt_ids = self.tokenizer_manager.tokenizer.encode(
-                        rendered_prompt, **encode_kwargs
                     )
                 except _CHAT_TEMPLATE_CLIENT_ERRORS as template_error:
                     # Template errors (e.g., from raise_exception in Jinja templates)
@@ -1349,9 +1462,15 @@ class OpenAIServingChat(OpenAIServingBase):
                 prompt_ids = self._append_assistant_prefix_to_prompt_ids(
                     prompt_ids, assistant_prefix
                 )
+                # The cached decode corresponds to prompt_ids before the prefix.
+                decoded_prompt = None
 
             if is_multimodal:
-                prompt = self.tokenizer_manager.tokenizer.decode(prompt_ids)
+                prompt = (
+                    decoded_prompt
+                    if decoded_prompt is not None
+                    else self.tokenizer_manager.tokenizer.decode(prompt_ids)
+                )
 
         stop = request.stop
         image_data = image_data if image_data else None
@@ -1367,6 +1486,70 @@ class OpenAIServingChat(OpenAIServingBase):
             modalities=modalities,
             stop=stop,
         )
+
+    def _render_and_encode_chat_template(
+        self,
+        messages: List[Dict[str, Any]],
+        *,
+        tools: Optional[List[Dict]],
+        template_kwargs: Dict[str, Any],
+        encode_kwargs: Dict[str, Any],
+        use_cache: bool,
+    ) -> tuple[str, List[int], Optional[str]]:
+        cache_key = None
+        if use_cache:
+            try:
+                cache_key = orjson.dumps(
+                    (
+                        getattr(
+                            self.tokenizer_manager.tokenizer,
+                            "chat_template",
+                            None,
+                        ),
+                        messages,
+                        tools,
+                        template_kwargs,
+                        encode_kwargs,
+                    ),
+                    option=orjson.OPT_SORT_KEYS,
+                )
+            except TypeError:
+                pass
+
+        if cache_key is not None:
+            cached = self._chat_template_cache.get(cache_key)
+            if cached is not None:
+                self._chat_template_cache.move_to_end(cache_key)
+                rendered_prompt, prompt_ids, decoded_prompt = cached
+                return rendered_prompt, list(prompt_ids), decoded_prompt
+
+        rendered_prompt = self.tokenizer_manager.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            tools=tools,
+            return_dict=False,
+            **template_kwargs,
+        )
+        prompt_ids = self.tokenizer_manager.tokenizer.encode(
+            rendered_prompt, **encode_kwargs
+        )
+        decoded_prompt = (
+            self.tokenizer_manager.tokenizer.decode(prompt_ids)
+            if cache_key is not None
+            else None
+        )
+
+        if cache_key is not None:
+            self._chat_template_cache[cache_key] = (
+                rendered_prompt,
+                tuple(prompt_ids),
+                decoded_prompt,
+            )
+            if len(self._chat_template_cache) > _CHAT_TEMPLATE_CACHE_MAX_SIZE:
+                self._chat_template_cache.popitem(last=False)
+
+        return rendered_prompt, prompt_ids, decoded_prompt
 
     def _apply_conversation_template(
         self,
@@ -1523,7 +1706,11 @@ class OpenAIServingChat(OpenAIServingBase):
             return
 
         if self.reasoning_parser == "hunyuan":
-            request.reasoning_effort = "medium" if enabled else "no_think"
+            config = self.template_manager.reasoning_config
+            if config is not None and config.special_case == "hunyuan_effort":
+                request.reasoning_effort = "high" if enabled else "no_think"
+            else:
+                request.reasoning_effort = "medium" if enabled else "no_think"
             return
 
         if self.reasoning_parser == "inkling":
@@ -1592,6 +1779,9 @@ class OpenAIServingChat(OpenAIServingBase):
             ) == "enabled"
 
         if self.reasoning_parser == "hunyuan":
+            config = self.template_manager.reasoning_config
+            if config is not None and config.special_case == "hunyuan_effort":
+                return request.reasoning_effort not in ("none", "no_think")
             # Hy3-preview template emits no <think> when reasoning_effort is
             # "no_think" / "none" / unset; forcing reasoning would route all
             # output into reasoning_content.

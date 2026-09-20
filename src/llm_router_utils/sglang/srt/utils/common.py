@@ -54,6 +54,14 @@ class VideoData:
     preprocess_kwargs: Optional[Dict] = None
 
 
+GLM_MEDIA_CONFIG_KEYS = (
+    "fps",
+    "max_frames",
+    "max_tokens_per_frame",
+    "max_image_tokens",
+)
+
+
 def find_local_repo_dir(repo_id: str, revision: Optional[str] = None) -> Optional[str]:
     """Best-effort lookup of a local HF cache dir for ``repo_id``."""
     if try_to_load_from_cache is None:

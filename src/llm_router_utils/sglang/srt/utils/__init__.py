@@ -1,4 +1,5 @@
 from llm_router_utils.sglang.srt.utils.common import (
+    GLM_MEDIA_CONFIG_KEYS,
     ImageData,
     VideoData,
     find_local_repo_dir,
@@ -14,6 +15,7 @@ from llm_router_utils.sglang.srt.utils.common import (
 )
 
 __all__ = [
+    "GLM_MEDIA_CONFIG_KEYS",
     "ImageData",
     "VideoData",
     "find_local_repo_dir",

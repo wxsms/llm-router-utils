@@ -125,6 +125,19 @@ try:
 except ImportError:
     pass
 
+# Raw state-spaces Mamba-1 checkpoints need a config class whose model_type is
+# "mamba"; alias the upstream transformers class (the SSM cache hooks the
+# upstream config adds are inference-engine-only and unused here).
+try:
+    from transformers import MambaConfig as _HFMambaConfig
+
+    class _MambaConfigAlias(_HFMambaConfig):
+        model_type = "mamba"
+
+    _CONFIG_REGISTRY["mamba"] = _MambaConfigAlias
+except ImportError:
+    pass
+
 for name, cls in _CONFIG_REGISTRY.items():
     try:
         AutoConfig.register(name, cls)
@@ -561,9 +574,15 @@ def get_tokenizer_from_processor(processor):
 
 
 # Turn-final markers that some checkpoints ship without EOS metadata:
-# <|eom_id|> (Llama-3 tool use) and <|content_model_end_sampling|> (Inkling,
-# whose bundled tokenizer config leaves eos_token unset).
-_ADDITIONAL_STOP_TOKEN_TEXTS = ("<|eom_id|>", "<|content_model_end_sampling|>")
+# <|eom_id|> (Llama-3 tool use), <|content_model_end_sampling|> (Inkling,
+# whose bundled tokenizer config leaves eos_token unset), and
+# <|ifm|im_end|> (some K2 Horizon checkpoints, notably 0.9B, name only
+# <|ifm|im_end|> as EOS).
+_ADDITIONAL_STOP_TOKEN_TEXTS = (
+    "<|eom_id|>",
+    "<|content_model_end_sampling|>",
+    "<|ifm|im_end|>",
+)
 
 
 def attach_additional_stop_token_ids(tokenizer):

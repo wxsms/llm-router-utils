@@ -3672,6 +3672,19 @@ class TestGlm47MoeDetector(unittest.TestCase):
             self.assertIsNone(self.detector.get_structural_tag(self.tools))
 
             parser = FunctionCallParser(self.tools, "glm47")
+            self.assertEqual(
+                "full_assistant_ebnf",
+                parser.get_structure_constraint("required")[0],
+            )
+            strict_tools = [
+                tool.model_copy(
+                    update={
+                        "function": tool.function.model_copy(update={"strict": True})
+                    }
+                )
+                for tool in self.tools
+            ]
+            parser = FunctionCallParser(strict_tools, "glm47")
             constraint = parser.get_structure_constraint("required")
 
             self.assertIsNotNone(constraint)
