@@ -6,6 +6,7 @@ from llm_router_utils.sglang.srt.parser.jinja_template_utils import (
     detect_jinja_template_content_format,
     process_content_for_template_format,
 )
+from llm_router_utils.sglang.srt.utils import VideoData
 
 
 
@@ -284,29 +285,37 @@ class TestTemplateContentFormatDetection(unittest.TestCase):
         self.assertEqual(result["content"][1], {"type": "video"})
 
     def test_process_content_video_with_max_dynamic_patch(self):
-        """Test video_url with max_dynamic_patch stores structured dict."""
+        """video_url with mdp/fps-style fields lands in VideoData.preprocess_kwargs."""
         msg_dict = {
             "role": "user",
             "content": [
                 {
                     "type": "video_url",
                     "video_url": {
-                        "url": "http://example.com/v.mp4",
+                        "url": "http://example.com/a.mp4",
                         "max_dynamic_patch": 4,
+                    },
+                },
+                {
+                    "type": "video_url",
+                    "video_url": {
+                        "url": "http://example.com/b.mp4",
+                        "fps": 1.5,
+                        "max_frames": 16,
                     },
                 },
             ],
         }
-        image_data = []
         video_data = []
-        audio_data = []
-        modalities = []
-        result = process_content_for_template_format(
-            msg_dict, "openai", image_data, video_data, audio_data, modalities
+        process_content_for_template_format(msg_dict, "openai", [], video_data, [], [])
+        self.assertEqual(
+            [(item.url, item.preprocess_kwargs) for item in video_data],
+            [
+                ("http://example.com/a.mp4", {"max_dynamic_patch": 4}),
+                ("http://example.com/b.mp4", {"fps": 1.5, "max_frames": 16}),
+            ],
         )
-        self.assertEqual(len(video_data), 1)
-        self.assertIsInstance(video_data[0], dict)
-        self.assertEqual(video_data[0]["max_dynamic_patch"], 4)
+        self.assertIsInstance(video_data[0], VideoData)
 
     def test_process_content_v32_encoding(self):
         """Test v32 encoding mode flattens text and ignores structured content parts."""
