@@ -74,8 +74,35 @@ try:
     class _DeepseekV4ConfigAlias(_HFDeepseekV3Config):
         model_type = "deepseek_v4"
 
+    class _DeepseekV41ConfigAlias(_HFDeepseekV3Config):
+        model_type = "deepseek_v41"
+        hc_pre_from_prev_sublayer = False
+        # V4 normalizes each attention query head (weightless rmsnorm) before RoPE.
+        q_head_norm = True
+        kv_source_layer_ids = ()
+        index_source_layer_ids = ()
+        candidate_source_layer_id = -1
+        candidate_topk_blocks = 0
+        candidate_block_size = 0
+        engram_layer_ids = ()
+        engram_num_embeddings = ()
+        engram_max_ngram_size = 1
+        engram_vocab_size = 0
+        engram_n_heads = 0
+        engram_head_dim = 0
+        engram_pad_token_id = 2
+        engram_compressed_vocab_size = 0
+
     _CONFIG_REGISTRY["deepseek_v32"] = _DeepseekV32ConfigAlias
     _CONFIG_REGISTRY["deepseek_v4"] = _DeepseekV4ConfigAlias
+
+    from llm_router_utils.sglang.srt.configs.deepseek_v41 import (
+        DEEPSEEK_V41_CONFIG_CLASSES,
+    )
+
+    _CONFIG_REGISTRY.update(
+        {cls.model_type: cls for cls in DEEPSEEK_V41_CONFIG_CLASSES}
+    )
 
     # For kimi_k25_eagle3
     class _KimiK2ConfigAlias(_HFDeepseekV3Config):

@@ -37,6 +37,7 @@ from llm_router_utils.sglang.srt.function_call.lfm2_detector import Lfm2Detector
 from llm_router_utils.sglang.srt.function_call.ling3_detector import Ling3Detector
 from llm_router_utils.sglang.srt.function_call.llama32_detector import Llama32Detector
 from llm_router_utils.sglang.srt.function_call.mistral_detector import MistralDetector
+from llm_router_utils.sglang.srt.function_call.parser_names import TOOL_CALL_PARSER_NAMES
 from llm_router_utils.sglang.srt.function_call.pythonic_detector import PythonicDetector
 from llm_router_utils.sglang.srt.function_call.qwen3_coder_detector import Qwen3CoderDetector
 from llm_router_utils.sglang.srt.function_call.utils import get_schema_properties
@@ -1725,7 +1726,7 @@ class TestDeepSeekV32Detector(unittest.TestCase):
                             "parameters"
                         ] += call.parameters
 
-        self.assertGreater(num_tool_call_chunks, 8)
+        self.assertEqual(num_tool_call_chunks, 1)
 
         self.assertEqual(len(tool_calls_by_index), 1)
         self.assertEqual(tool_calls_by_index[0]["name"], "get_favorite_tourist_spot")
@@ -1780,7 +1781,7 @@ class TestDeepSeekV32Detector(unittest.TestCase):
                             "parameters"
                         ] += call.parameters
 
-        self.assertGreater(num_tool_call_chunks, 8)
+        self.assertEqual(num_tool_call_chunks, 1)
         self.assertEqual(len(tool_calls_by_index), 1)
         self.assertEqual(tool_calls_by_index[0]["name"], "get_favorite_tourist_spot")
 
@@ -2135,7 +2136,7 @@ class TestDeepSeekV4Detector(unittest.TestCase):
                             "parameters"
                         ] += call.parameters
 
-        self.assertGreater(num_tool_call_chunks, 8)
+        self.assertEqual(num_tool_call_chunks, 1)
 
         self.assertEqual(len(tool_calls_by_index), 1)
         self.assertEqual(tool_calls_by_index[0]["name"], "get_favorite_tourist_spot")
@@ -6018,6 +6019,16 @@ class TestTopLevelCompositeToolSchema(unittest.TestCase):
         )
         self.assertEqual(name, "acme")
         self.assertEqual(json.loads(arguments), self.expected)
+
+
+class TestToolCallParserNames(unittest.TestCase):
+    def test_matches_registry(self):
+        # `server_args` builds the --tool-call-parser choices from this list to
+        # keep the registry, and its dependencies, out of argument parsing.
+        self.assertEqual(
+            sorted(TOOL_CALL_PARSER_NAMES),
+            sorted(FunctionCallParser.ToolCallParserEnum),
+        )
 
 
 if __name__ == "__main__":

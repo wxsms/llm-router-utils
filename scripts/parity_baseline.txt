@@ -26,3 +26,4 @@ utils/hf_transformers/config.py
 utils/hf_transformers/tokenizer.py
 utils/hf_transformers_patches.py
 utils/runai_utils.py
+entrypoints/openai/utils.py
