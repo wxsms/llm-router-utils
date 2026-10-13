@@ -255,8 +255,7 @@ PYTHONPATH=src python -c "from llm_router_utils import __version__; print(__vers
 
 ### 3. Update version records
 
-- Ensure the "Upstream source" line in `README.md` points to the sglang version this release tracks.
-- Ensure the version table in `README.md` has a row for the new release (added during the upgrade, see Step 6 above).
+- Ensure the "Version Mapping" table in `README.md` has a row for the new release pointing at the sglang version this release tracks (added during the upgrade, see Step 6 above).
 
 ### 4. Build and verify locally
 

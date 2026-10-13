@@ -453,6 +453,18 @@ def print_report(results: list[FileResult], show_diffs: bool) -> tuple[int, int]
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Diff bodies carry upstream docstring text with non-ASCII characters
+    # (U+2192 arrows, U+00E9). On Windows consoles whose code page is not
+    # UTF-8 (e.g. cp936/gbk), printing them raises UnicodeEncodeError and
+    # crashes the baseline-audit workflow documented in DEVELOPMENT.md.
+    # Reconfigure stdout/stderr to UTF-8 with replacement so the report
+    # always prints.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError):
+            pass
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--rel-path",

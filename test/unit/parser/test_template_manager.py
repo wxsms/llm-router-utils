@@ -1133,6 +1133,29 @@ class TestResolveAutoParsers(unittest.TestCase):
                 self.assertEqual(args.reasoning_parser, "ling3")
                 self.assertEqual(args.tool_call_parser, "ling3")
 
+    def test_deepseek_v41_architectures_and_model_types_use_dsv41_parsers(self):
+        cases = (
+            (["DeepseekV41ForCausalLM"], ""),
+            (None, "deepseek_v41"),
+        )
+        for architectures, model_type in cases:
+            with self.subTest(architectures=architectures, model_type=model_type):
+                args = self._make_server_args(
+                    reasoning_parser="auto", tool_call_parser="auto"
+                )
+                tokenizer = _DummyTokenizer([])
+                config = SimpleNamespace(
+                    architectures=architectures, model_type=model_type
+                )
+
+                with _patch_hf_transformers_utils(
+                    Mock(return_value=tokenizer), Mock(return_value=config)
+                ):
+                    resolve_auto_parsers(args)
+
+                self.assertEqual(args.reasoning_parser, "deepseek-v41")
+                self.assertEqual(args.tool_call_parser, "deepseekv41")
+
     def test_minimax_architectures_and_model_types_use_minimax_parsers(self):
         cases = (
             (["MiniMaxM3SparseForCausalLM"], "", "minimax-m3", "minimax-m3"),
