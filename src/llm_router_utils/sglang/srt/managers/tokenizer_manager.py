@@ -59,6 +59,10 @@ class TokenizerManager:
             trust_remote_code=self.server_args.trust_remote_code,
             context_length=self.server_args.context_length,
         )
+        # Mirrors upstream TokenizerManager: read from the model config so the
+        # dsv41 encoder can replace its image placeholder with the model's
+        # image token.
+        self.image_token_id = self.model_config.image_token_id
 
     def init_tokenizer_and_processor(self) -> None:
         from llm_router_utils.sglang.srt.utils.hf_transformers.tokenizer import (

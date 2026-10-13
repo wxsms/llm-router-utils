@@ -57,6 +57,10 @@ class GenerateReqInput:
     require_reasoning: bool = False
     priority: Optional[int] = None
     conversation_id: Optional[str] = None
+    # Logprob rendering mode for the sampling-mask path ("selected"/"support").
+    # Pass-through only in this distribution: upstream consumers live in
+    # stripped runtime code, so the field is carried for protocol parity.
+    sampling_logprobs_mode: Optional[str] = None
     # Inference-time fields kept as Any for compatibility
     received_time: Any = None
 

@@ -132,6 +132,7 @@ class SchedulerStats:
     num_prefill_inflight_queue_reqs: QueueCount = field(default_factory=QueueCount)
     num_decode_prealloc_queue_reqs: QueueCount = field(default_factory=QueueCount)
     num_decode_transfer_queue_reqs: QueueCount = field(default_factory=QueueCount)
+    num_decode_host_receive_queue_reqs: QueueCount = field(default_factory=QueueCount)
     kv_transfer_speed_gb_s: float = 0.0
     kv_transfer_latency_ms: float = 0.0
     pending_prealloc_token_usage: float = 0.0

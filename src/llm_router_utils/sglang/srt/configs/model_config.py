@@ -69,6 +69,12 @@ class ModelConfig:
             multimodal_markers = ["vlm", "vl", "vision", "multimodal", "image"]
             self.is_multimodal = any(m in model_type.lower() for m in multimodal_markers)
 
+        # multimodal token id (mirrors upstream ModelConfig; used by the dsv41
+        # encoder's image-placeholder substitution)
+        self.image_token_id = getattr(self.hf_config, "image_token_id", None) or getattr(
+            self.hf_config, "image_token_index", None
+        )
+
         # Context length from config if not specified
         if self.context_length is None and self.hf_config is not None:
             self.context_length = getattr(self.hf_config, "max_position_embeddings", None)

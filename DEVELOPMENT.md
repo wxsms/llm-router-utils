@@ -27,7 +27,7 @@ Upstream sglang is pinned as a git submodule at `vendor/sglang` (branch `release
    git add vendor/sglang
    ```
 
-4. **Confirm the baseline tag**: the current sglang version this repo tracks is recorded in the "Upstream source" line of `README.md` and in the version table at the bottom.
+4. **Confirm the baseline tag**: the current sglang version this repo tracks is recorded in the "Version Mapping" table in `README.md`.
 
 ## Step 1: Determine the Change Set
 
@@ -217,8 +217,7 @@ When you adopt a new upstream file that carries a header, the checker will flag 
 
 ## Step 6: Update Version Records
 
-1. Update the "Upstream source" line in `README.md` to the new version.
-2. Append a row to the version table in `README.md`.
+1. Append a row to the "Version Mapping" table in `README.md`.
 3. Commit (do not tag yet — tagging is part of the release process, see below).
 
 ## Releasing a New Version
@@ -256,8 +255,7 @@ PYTHONPATH=src python -c "from llm_router_utils import __version__; print(__vers
 
 ### 3. Update version records
 
-- Ensure the "Upstream source" line in `README.md` points to the sglang version this release tracks.
-- Ensure the version table in `README.md` has a row for the new release (added during the upgrade, see Step 6 above).
+- Ensure the "Version Mapping" table in `README.md` has a row for the new release pointing at the sglang version this release tracks (added during the upgrade, see Step 6 above).
 
 ### 4. Build and verify locally
 
