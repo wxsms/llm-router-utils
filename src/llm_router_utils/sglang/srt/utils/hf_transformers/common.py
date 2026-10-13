@@ -73,9 +73,6 @@ try:
 
     class _DeepseekV4ConfigAlias(_HFDeepseekV3Config):
         model_type = "deepseek_v4"
-
-    class _DeepseekV41ConfigAlias(_HFDeepseekV3Config):
-        model_type = "deepseek_v41"
         hc_pre_from_prev_sublayer = False
         # V4 normalizes each attention query head (weightless rmsnorm) before RoPE.
         q_head_norm = True

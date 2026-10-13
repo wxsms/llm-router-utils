@@ -1470,7 +1470,7 @@ def check_option_names(names) -> None:
     seen = set()
     for name in names:
         key = name.strip().casefold()
-        if key == "":
+        if not key:
             raise ValueError("option names must be nonempty")
         # Each option is rendered as one prompt line.
         if any(unicodedata.category(c) in ("Cc", "Zl", "Zp") for c in name):

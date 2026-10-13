@@ -27,7 +27,7 @@ Upstream sglang is pinned as a git submodule at `vendor/sglang` (branch `release
    git add vendor/sglang
    ```
 
-4. **Confirm the baseline tag**: the current sglang version this repo tracks is recorded in the "Upstream source" line of `README.md` and in the version table at the bottom.
+4. **Confirm the baseline tag**: the current sglang version this repo tracks is recorded in the "Version Mapping" table in `README.md`.
 
 ## Step 1: Determine the Change Set
 
@@ -217,8 +217,7 @@ When you adopt a new upstream file that carries a header, the checker will flag 
 
 ## Step 6: Update Version Records
 
-1. Update the "Upstream source" line in `README.md` to the new version.
-2. Append a row to the version table in `README.md`.
+1. Append a row to the "Version Mapping" table in `README.md`.
 3. Commit (do not tag yet — tagging is part of the release process, see below).
 
 ## Releasing a New Version
