@@ -4,6 +4,7 @@ import unittest
 
 from llm_router_utils.sglang.srt.parser.jinja_template_utils import (
     detect_jinja_template_content_format,
+    jinja_template_may_reorder_tool_results,
     process_content_for_template_format,
 )
 from llm_router_utils.sglang.srt.utils import VideoData
@@ -12,6 +13,40 @@ from llm_router_utils.sglang.srt.utils import VideoData
 
 class TestTemplateContentFormatDetection(unittest.TestCase):
     """Test template content format detection functionality."""
+
+    def test_detect_tool_result_id_association(self):
+        attribute_template = """
+        {% for message in messages %}
+            {{ message.tool_call_id }}
+        {% endfor %}
+        """
+        item_template = "{{ messages[0]['tool_call_id'] }}"
+        get_template = "{{ messages[0].get('tool_call_id') }}"
+        select_template = (
+            "{{ messages | selectattr('tool_call_id', 'equalto', 'call-a') | list }}"
+        )
+        self.assertTrue(jinja_template_may_reorder_tool_results(attribute_template))
+        self.assertTrue(jinja_template_may_reorder_tool_results(item_template))
+        self.assertTrue(jinja_template_may_reorder_tool_results(get_template))
+        self.assertTrue(jinja_template_may_reorder_tool_results(select_template))
+
+    def test_sort_by_tool_call_id_value_is_not_association(self):
+        # sort/groupby order by the id string value, which message-order
+        # canonicalization cannot reproduce, so they must not activate it.
+        sort_template = "{{ messages | sort(attribute='tool_call_id') }}"
+        groupby_template = "{{ messages | groupby('tool_call_id') }}"
+
+        self.assertFalse(jinja_template_may_reorder_tool_results(sort_template))
+        self.assertFalse(jinja_template_may_reorder_tool_results(groupby_template))
+
+    def test_tool_call_id_text_does_not_enable_order_recovery(self):
+        self.assertFalse(
+            jinja_template_may_reorder_tool_results(
+                "{# tool_call_id is mentioned only in a comment #}{{ messages }}"
+            )
+        )
+        self.assertFalse(jinja_template_may_reorder_tool_results("{{{{ invalid"))
+        self.assertFalse(jinja_template_may_reorder_tool_results(None))
 
     def test_detect_llama4_openai_format(self):
         """Test detection of llama4-style template (should be 'openai' format)."""
@@ -134,6 +169,31 @@ class TestTemplateContentFormatDetection(unittest.TestCase):
         ]
         self.assertEqual(result["content"], expected_content)
         self.assertEqual(result["role"], "user")
+
+    def test_process_content_preserves_image_content_hash(self):
+        content_hash = "sha256:" + "ab" * 32
+        image_data = []
+        result = process_content_for_template_format(
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "http://example.com/image.jpg",
+                            "content_hash": content_hash,
+                        },
+                    }
+                ],
+            },
+            "openai",
+            image_data,
+            [],
+            [],
+            [],
+        )
+        self.assertEqual(result["content"], [{"type": "image"}])
+        self.assertEqual(image_data[0].content_hash, content_hash)
 
     def test_process_content_string_format(self):
         """Test content processing for string format."""
