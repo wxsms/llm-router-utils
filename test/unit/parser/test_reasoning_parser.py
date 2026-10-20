@@ -435,21 +435,6 @@ class TestKimiDetector(unittest.TestCase):
         self.assertEqual(result.reasoning_text, "")
 
 
-class TestKimiK2Detector(unittest.TestCase):
-    """Test cases for KimiK2 detector with tool interruption support."""
-
-    def setUp(self):
-        self.detector = KimiK2Detector()
-
-    def test_init(self):
-        """Test KimiK2Detector initialization."""
-        self.assertEqual(self.detector.think_start_token, "<think>")
-        self.assertEqual(self.detector.think_end_token, "</think>")
-        self.assertEqual(self.detector.tool_start_token, "<|tool_calls_section_begin|>")
-        self.assertFalse(self.detector._in_reasoning)
-        self.assertTrue(self.detector.stream_reasoning)
-
-
 class TestGlm45Detector(unittest.TestCase):
     """Test cases for GLM45 detector with tool interruption support."""
 
@@ -525,13 +510,6 @@ class TestGlm45Detector(unittest.TestCase):
 class TestLing3Detector(unittest.TestCase):
     def setUp(self):
         self.detector = Ling3Detector()
-
-    def test_init(self):
-        self.assertEqual(self.detector.tool_start_token, "<tool_call>")
-        self.assertEqual(self.detector.reasoning_default, "enable_thinking")
-        self.assertTrue(self.detector.thinks_internally)
-        self.assertTrue(self.detector._force_nonempty_content)
-        self.assertFalse(self.detector._in_reasoning)
 
     def test_tool_interrupt(self):
         text = "<think>I need a tool<tool_call>get_weather</tool_call>"

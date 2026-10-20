@@ -4,7 +4,6 @@ import copy
 import json
 import logging
 import math
-import time
 import uuid
 from collections import OrderedDict
 from enum import Enum
@@ -38,6 +37,9 @@ from llm_router_utils.sglang.srt.entrypoints.openai import (
     encoding_dsv4,
     encoding_dsv32,
     encoding_dsv41,
+)
+from llm_router_utils.sglang.srt.entrypoints.openai.parallel_prompt_encode import (
+    parallel_prompt_encode,
 )
 from llm_router_utils.sglang.srt.entrypoints.openai.protocol import (
     ChatCompletionMessageGenericParam,
@@ -76,6 +78,9 @@ from llm_router_utils.sglang.srt.parser.jinja_template_utils import (
 from llm_router_utils.sglang.srt.parser.reasoning_parser import (
     IQuestQ1ReasoningDetector,
     ReasoningParser,
+)
+from llm_router_utils.sglang.srt.parser.template_detection import (
+    detect_inline_system_support,
 )
 from llm_router_utils.sglang.srt.utils import ImageData
 
@@ -258,6 +263,7 @@ class OpenAIServingChat(OpenAIServingBase):
         # Which Python-based chat encoder (if any) bypasses apply_chat_template.
         # Values: "dsv32", "dsv4", or custom values set by subclass. None for default.
         self.chat_encoding_spec = self._resolve_chat_encoding_spec()
+        self.supports_inline_system = self._resolve_inline_system_support()
         self._dsv4_reasoning_effort_profile = (
             chat_encoding.resolve_dsv4_reasoning_effort_profile(
                 model_path=self.tokenizer_manager.model_path,
@@ -392,6 +398,16 @@ class OpenAIServingChat(OpenAIServingBase):
         if encoded and encoded[0] == self.tokenizer_manager.tokenizer.bos_token_id:
             encoded = encoded[1:]
         return prompt_ids + encoded
+
+    def _resolve_inline_system_support(self) -> bool:
+        if self.chat_encoding_spec is not None:
+            return chat_encoding.spec_supports_inline_system(self.chat_encoding_spec)
+        if self.template_manager.chat_template_name is not None:
+            return False
+        tokenizer = self.tokenizer_manager.tokenizer
+        return tokenizer is not None and detect_inline_system_support(
+            tokenizer.chat_template
+        )
 
     def _resolve_chat_encoding_spec(self) -> Optional[str]:
         """Determine which chat encoding spec to use.
@@ -796,8 +812,12 @@ class OpenAIServingChat(OpenAIServingBase):
         tools = None
         tool_call_stop = None
         effective_tools = self._effective_tools(request)
-        glm_constraint = self.tool_call_parser == "glm47" and not any(
-            tool.function.strict for tool in effective_tools
+        # Only tool-bearing requests get the full-assistant EBNF: its terminal
+        # state finishes a request even under ignore_eos.
+        glm_constraint = (
+            self.tool_call_parser == "glm47"
+            and bool(effective_tools)
+            and not any(tool.function.strict for tool in effective_tools)
         )
         if glm_constraint:
             enable_thinking = (request.chat_template_kwargs or {}).get(
@@ -931,8 +951,8 @@ class OpenAIServingChat(OpenAIServingBase):
     ) -> Optional[PromptTokensDetails]:
         if not self.tokenizer_manager.server_args.enable_cache_report:
             return None
-        return UsageProcessor._details_if_cached(
-            content["meta_info"].get("cached_tokens", 0)
+        return PromptTokensDetails(
+            cached_tokens=content["meta_info"].get("cached_tokens", 0)
         )
 
     def _process_tool_call_id(
@@ -1111,6 +1131,7 @@ class OpenAIServingChat(OpenAIServingBase):
         content: Dict[str, Any],
         request: ChatCompletionRequest,
         has_tool_calls: Dict[int, bool],
+        created: int,
         continuous_usage_stats: bool = False,
         flush: bool = False,
     ):
@@ -1119,6 +1140,7 @@ class OpenAIServingChat(OpenAIServingBase):
         With flush=True (the terminal delta), the parser also drains text it
         held back waiting for a marker that can no longer arrive.
         """
+        effective_tools = self._effective_tools(request)
         if index not in parser_dict:
             is_required = request.tool_choice == "required" or isinstance(
                 request.tool_choice, ToolChoice
@@ -1144,7 +1166,7 @@ class OpenAIServingChat(OpenAIServingBase):
                     parser_dict[index] = JsonArrayParser()
             else:
                 parser_dict[index] = FunctionCallParser(
-                    tools=request.tools,
+                    tools=effective_tools,
                     tool_call_parser=self.tool_call_parser,
                     tokenizer=self.tokenizer_manager.tokenizer,
                 )
@@ -1153,7 +1175,7 @@ class OpenAIServingChat(OpenAIServingBase):
 
         # Handle both FunctionCallParser and JsonArrayParser
         if isinstance(parser, JsonArrayParser):
-            result = parser.parse_streaming_increment(delta, request.tools)
+            result = parser.parse_streaming_increment(delta, effective_tools)
             normal_text, calls = result.normal_text, result.calls
         else:
             normal_text, calls = parser.parse_stream_chunk(delta)
@@ -1171,7 +1193,7 @@ class OpenAIServingChat(OpenAIServingBase):
             )
             chunk = ChatCompletionStreamResponse(
                 id=content["meta_info"]["id"],
-                created=int(time.time()),
+                created=created,
                 choices=[choice_data],
                 model=request.model,
             )
@@ -1224,7 +1246,7 @@ class OpenAIServingChat(OpenAIServingBase):
             )
             chunk = ChatCompletionStreamResponse(
                 id=content["meta_info"]["id"],
-                created=int(time.time()),
+                created=created,
                 choices=[choice_data],
                 model=request.model,
             )
@@ -1249,6 +1271,7 @@ class OpenAIServingChat(OpenAIServingBase):
         content: Dict[str, Any],
         request: ChatCompletionRequest,
         index: int,
+        created: int,
     ) -> Optional[str]:
         """
         Check for any remaining tool call arguments that need to be streamed
@@ -1310,7 +1333,7 @@ class OpenAIServingChat(OpenAIServingBase):
 
             chunk = ChatCompletionStreamResponse(
                 id=content["meta_info"]["id"],
-                created=int(time.time()),
+                created=created,
                 choices=[choice_data],
                 model=request.model,
             )
@@ -1408,16 +1431,17 @@ class OpenAIServingChat(OpenAIServingBase):
 
             # An empty system message hosts the request tools; dsv41 renders a
             # system token for it, so it only gets one when tools need the host.
-            if messages[0]["role"] != "system" and (request.tools or not is_dsv41):
+            request_tools = request.tools if tools else None
+            if messages[0]["role"] != "system" and (request_tools or not is_dsv41):
                 messages.insert(0, {"role": "system", "content": ""})
-            if request.tools:
+            if request_tools:
                 messages[0]["tools"] = [
                     (
                         chat_encoding.dsv41_tool_payload(tool)
                         if is_dsv41
                         else tool.model_dump()
                     )
-                    for tool in request.tools
+                    for tool in request_tools
                 ]
 
             # Default encoding (dsv4/dsv41/dsv32)
@@ -1655,8 +1679,8 @@ class OpenAIServingChat(OpenAIServingBase):
                 return_dict=False,
                 **template_kwargs,
             )
-            prompt_ids = self.tokenizer_manager.tokenizer.encode(
-                rendered_prompt, **encode_kwargs
+            prompt_ids = parallel_prompt_encode(
+                self.tokenizer_manager.tokenizer, rendered_prompt, encode_kwargs
             )
         decoded_prompt = (
             self.tokenizer_manager.tokenizer.decode(prompt_ids)
