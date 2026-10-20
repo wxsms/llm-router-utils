@@ -122,6 +122,12 @@ class PortArgs:
                 "Decoupled speculative decoding is not supported in llm-router-utils."
             )
 
+        # Upstream v0.5.22 uses utils.network.get_free_port_below_ephemeral()
+        # here (the scheduler child binds this port only later, and bind(0)
+        # hands out ports from the kernel ephemeral range). Accepted local
+        # divergence: this slimmed init_new is router-service setup where the
+        # port is consumed in-process; revisit if a scheduler child ever
+        # binds it.
         nccl_port = _get_free_port()
         tokenizer_worker_num = getattr(server_args, "tokenizer_worker_num", 1)
         if tokenizer_worker_num == 1:
