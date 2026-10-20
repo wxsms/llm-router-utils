@@ -1007,6 +1007,9 @@ class ChatCompletionRequest(PDRoutingFields):
     # Priority for the request
     priority: Optional[int] = None
 
+    # Deprecated: use routed_dp_rank instead
+    data_parallel_rank: Optional[int] = None
+
     # OpenAI/SGLang default sampling parameters
     _DEFAULT_SAMPLING_PARAMS = {
         "temperature": 1.0,
@@ -1891,6 +1894,9 @@ class ResponsesRequest(PDRoutingFields):
     cache_salt: Optional[str] = Field(
         default=None, description="Cache salt for request caching"
     )
+
+    # Deprecated: use routed_dp_rank instead
+    data_parallel_rank: Optional[int] = None
 
     # SGLang sampling extras. ``None`` defers to ``--preferred-sampling-params``.
     frequency_penalty: float = 0.0

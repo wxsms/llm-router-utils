@@ -19,8 +19,9 @@ limitations under the License.
 """
 KV cache event structs.
 
-Extracted from sglang.srt.disaggregation.kv_events (release/v0.5.16, first 128 lines).
-Only the msgspec Struct definitions + StorageMedium enum are retained — the publisher
+Extracted from sglang.srt.disaggregation.kv_events (structs first taken from
+release/v0.5.16; kept in sync through release/v0.5.22). Only the msgspec Struct
+definitions + StorageMedium enum are retained — the publisher
 machinery (EventPublisher / NullEventPublisher / ZmqEventPublisher /
 select_kv_publisher_dp_rank / OffloadedState) is stripped because router services
 consume KV events rather than publish them.
