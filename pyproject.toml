@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llm-router-utils"
-version = "0.8.0"
+version = "0.8.1"
 description = "Lightweight extraction of sglang's reasoning/tool-call parsers and chat template rendering for router services."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -29,7 +29,7 @@ dependencies = [
   "orjson",
   "typing_extensions",
   "tiktoken",
-  "transformers==5.12.1",
+  "transformers==5.19.0",
   "openai==2.6.1",
   "mistral_common>=1.11.5",
   "packaging",
@@ -45,7 +45,7 @@ Source = "https://github.com/wxsms/llm-router-utils"
 Issues = "https://github.com/wxsms/llm-router-utils/issues"
 
 [project.optional-dependencies]
-fastokens = ["fastokens>=0.1.1,<0.2.0"]
+fastokens = ["fastokens>=0.3.2"]
 test = ["pytest", "pytest-cov"]
 
 [tool.setuptools.packages.find]

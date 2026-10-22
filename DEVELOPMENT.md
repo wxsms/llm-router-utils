@@ -27,6 +27,8 @@ Upstream sglang is pinned as a git submodule at `vendor/sglang` (branch `release
    git add vendor/sglang
    ```
 
+   Then align pinned dependencies (see Step 3.5) — upstream frequently bumps `transformers`, `openai`, `xgrammar`, and the `fastokens` extra between releases.
+
 4. **Confirm the baseline tag**: the current sglang version this repo tracks is recorded in the "Version Mapping" table in `README.md`.
 
 ## Step 1: Determine the Change Set
@@ -133,6 +135,27 @@ This repo is a derivative work of sglang. When adopting or modifying upstream fi
 - `LICENSE` and `NOTICE` at repo root must be preserved.
 
 Run `make check-license` to verify (see Step 5).
+
+## Step 3.5: Align Pinned Dependencies
+
+Upstream sglang pins several third-party dependencies with exact versions (`==`) in `vendor/sglang/python/pyproject.toml`. This repo must mirror those pins in its own `pyproject.toml` for the packages the extracted code actually imports. Mismatched pins cause runtime drift between the migrated code and the upstream behavior the tests were written against (this actually happened: `transformers` stayed at the v0.5.16-era pin `5.12.1` across the v0.5.17→v0.5.22 upgrades until it was realigned to `5.19.0`).
+
+After switching the submodule to a new release, diff the pins:
+
+```bash
+# Pins declared by the NEW upstream version
+git -C vendor/sglang show v0.5.NEW:python/pyproject.toml | grep -E '"[a-zA-Z_-]+=='
+
+# Pins currently in this repo
+grep -E '"[a-zA-Z_-]+==' pyproject.toml
+```
+
+For every pinned package that exists in this repo's `dependencies` (or `optional-dependencies`), update the pin in `pyproject.toml` to match upstream exactly — including the `fastokens` extra, whose constraint upstream raises in minor releases (v0.5.21: `>=0.1.1,<0.2.0` → v0.5.22: `>=0.3.2`).
+
+Notes:
+- Packages upstream pins but this repo does not import (torch, flashinfer, CUDA libraries, sentencepiece, tokenizers, openai-harmony, etc.) are irrelevant — the extracted frontend layer never imports them.
+- The reverse check also matters: if this repo's code imports a package that is only a transitive dependency today (e.g. `gguf`, used behind a `try/except ImportError` guard in `hf_transformers_patches.py`), it works without a pin but consider declaring it if an upgrade makes the import mandatory.
+- Re-run `python -m pip install -e ".[test]"` after changing pins so the local environment matches the declared constraints, then run the full test suite (Step 5).
 
 ## Step 4: Windows Test Adaptation
 
@@ -301,6 +324,7 @@ python -c "import urllib.request, json; d=json.load(urllib.request.urlopen('http
 ### Release checklist
 
 - [ ] All four checks pass (pytest, check-torch, check-parity, check-license)
+- [ ] Dependency pins in `pyproject.toml` match the tracked upstream release (Step 3.5)
 - [ ] `pyproject.toml` and `_version.py` bumped to the same version
 - [ ] `PYTHONPATH=src python -c "from llm_router_utils import __version__"` prints the new version
 - [ ] README version table has a row for the new release
@@ -318,6 +342,7 @@ python -c "import urllib.request, json; d=json.load(urllib.request.urlopen('http
 - **Special characters**: when handling code containing XML-like tags (`<...>`), tool calls may be mis-parsed; use `create_file` to write a helper script or base64-encode the content.
 - **CRLF**: a Windows checkout produces CRLF line endings; use `diff --strip-trailing-cr` when comparing against upstream LF.
 - **"No change needed" for slimmed files**: if every upstream change lands in already-stripped inference-engine code (scheduling, dispatch, metrics, cuda-graph, etc.), the slimmed version needs no change. Verify this file-by-file.
+- **Stale dependency pins after an upgrade**: bumping the submodule does not update `pyproject.toml`. Always run the pin diff in Step 3.5 — a missed pin (like `transformers==5.12.1` surviving three upstream bumps) silently tests against an old library version.
 
 ## Version Table
 
