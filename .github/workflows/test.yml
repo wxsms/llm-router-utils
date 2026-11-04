@@ -27,48 +27,59 @@ jobs:
       - name: Run tests
         run: PYTHONPATH=src python -m pytest test/ --tb=short
 
-  # The `inkling`, `deepseek-recipe` and other platform-gated paths skip on
-  # runners without their wheels, so the golden-reference assertions would
-  # never execute. This leg installs the optional extras that DO resolve on
-  # Linux and requires those tests to actually run (not skip), so a format
-  # change in an extracted package fails here instead of passing vacuously.
+  # The `inkling` and `deepseek-recipe` paths are backed by compiled wheels that
+  # do not exist for every platform, so those tests skip on a plain runner and
+  # their golden-reference assertions would never execute. This leg installs the
+  # real wheels and then FAILS IF ANYTHING SKIPPED, so a format change in an
+  # extracted package is caught here instead of passing vacuously.
   platform-extras:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # tml-renderers==0.1.0 publishes cp311-abi3 wheels only (no sdist), and
+        # the `inkling` extra's marker therefore requires >= 3.11.
+        python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          # tml-renderers==0.1.0 ships cp311-abi3 wheels only, so 3.10 is out.
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
 
-      - name: Install package + inkling extra
-        run: python -m pip install -e ".[test,inkling]"
-
-      - name: Inkling golden-reference tests must run, not skip
+      - name: Install package + platform extras
+        # deepseek-recipe arrives via the default dependencies on Linux (its
+        # platform marker selects it), so one install command pulls both.
         run: |
-          # A skip here means the wheel was missing, so the golden-reference
-          # assertions never executed and the step would pass vacuously.
-          # pipefail: without it `... | tee` reports tee's (always 0) status.
-          set -o pipefail
-          PYTHONPATH=src python -m pytest test/unit/parser/test_inkling_renderer.py \
-            -q -rs --no-header | tee /tmp/inkling.txt
-          if grep -qE '[0-9]+ skipped' /tmp/inkling.txt; then
-            echo "::error::inkling tests skipped - tml-renderers wheel not installed"
-            exit 1
-          fi
+          python -m pip install -e ".[test,inkling]"
+          python -c "import deepseek_recipe; print('deepseek-recipe import ok')"
+          python -c "import tml_renderers; print('tml-renderers import ok')"
 
       - name: DeepSeek-V4.1 tests must run, not skip
         run: |
-          # deepseek-recipe is a hard dependency on Linux, so these must execute.
+          # pipefail: without it `... | tee` reports tee's (always 0) exit status
+          # and a failing test would not fail the job.
           set -o pipefail
           PYTHONPATH=src python -m pytest \
             test/unit/function_call/test_deepseekv41_detector.py \
             -q -rs --no-header | tee /tmp/dsv41.txt
           if grep -qE '[0-9]+ skipped' /tmp/dsv41.txt; then
-            echo "::error::deepseekv41 tests skipped - deepseek-recipe wheel not installed"
+            echo "::error::deepseekv41 tests skipped - deepseek-recipe not usable"
             exit 1
           fi
+
+      - name: Inkling golden-reference tests must run, not skip
+        run: |
+          set -o pipefail
+          PYTHONPATH=src python -m pytest test/unit/parser/test_inkling_renderer.py \
+            -q -rs --no-header | tee /tmp/inkling.txt
+          if grep -qE '[0-9]+ skipped' /tmp/inkling.txt; then
+            echo "::error::inkling tests skipped - tml-renderers not usable"
+            exit 1
+          fi
+
+      - name: Full suite with every platform extra present
+        run: PYTHONPATH=src python -m pytest test/ --tb=short
 
   invariants:
     # Version-independent checks that need the upstream submodule: torch-import
