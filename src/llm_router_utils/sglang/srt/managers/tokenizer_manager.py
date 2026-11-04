@@ -25,6 +25,7 @@ import logging
 from typing import Any, Optional
 
 from llm_router_utils.sglang.srt.configs.model_config import ModelConfig
+from llm_router_utils.sglang.srt.runtime_context import set_runtime_context
 from llm_router_utils.sglang.srt.server_args import PortArgs, ServerArgs
 
 logger = logging.getLogger(__name__)
@@ -80,6 +81,13 @@ class TokenizerManager:
         # dsv41 encoder can replace its image placeholder with the model's
         # image token.
         self.image_token_id = self.model_config.image_token_id
+        # Upstream publishes the resolved config to a process-wide runtime
+        # context before serving; that is what backs serving_chat's
+        # get_model()/get_serving() reads. There is no publication layer here,
+        # so install the pieces those accessors need as soon as they exist.
+        set_runtime_context(
+            server_args=self.server_args, model_config=self.model_config
+        )
 
     def init_tokenizer_and_processor(self) -> None:
         from llm_router_utils.sglang.srt.utils.hf_transformers.tokenizer import (

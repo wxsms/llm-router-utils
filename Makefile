@@ -32,11 +32,7 @@ build:
 
 check-torch:
 	@echo "Checking for direct torch imports in src/..."
-	@if grep -rn "^import torch\|^from torch" src/ 2>/dev/null | grep -v __pycache__; then \
-		echo "FAIL: direct torch import found (see above)"; exit 1; \
-	else \
-		echo "OK: no direct torch import in src/"; \
-	fi
+	@python scripts/check_torch_imports.py
 
 check-parity:
 	@echo "Checking retained src/ parity against vendor/sglang upstream..."

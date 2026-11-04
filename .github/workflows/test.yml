@@ -27,6 +27,35 @@ jobs:
       - name: Run tests
         run: PYTHONPATH=src python -m pytest test/ --tb=short
 
+  # The `inkling`, `deepseek-recipe` and other platform-gated paths skip on
+  # runners without their wheels, so the golden-reference assertions would
+  # never execute. This leg installs the optional extras that DO resolve on
+  # Linux and requires those tests to actually run (not skip), so a format
+  # change in an extracted package fails here instead of passing vacuously.
+  platform-extras:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # tml-renderers==0.1.0 ships cp311-abi3 wheels only, so 3.10 is out.
+          python-version: "3.12"
+
+      - name: Install package + inkling extra
+        run: python -m pip install -e ".[test,inkling]"
+
+      - name: Inkling golden-reference tests must run, not skip
+        run: |
+          # A skip here means the wheel was missing, so the golden-reference
+          # assertions never executed and the step would pass vacuously.
+          PYTHONPATH=src python -m pytest test/unit/parser/test_inkling_renderer.py \
+            -q -rs --no-header | tee /tmp/inkling.txt
+          if grep -qE '[0-9]+ skipped' /tmp/inkling.txt; then
+            echo "::error::inkling tests skipped — the tml-renderers wheel was not installed"
+            exit 1
+          fi
+
   invariants:
     # Version-independent checks that need the upstream submodule: torch-import
     # ban, parity against vendor/sglang, and Apache 2.0 license compliance.

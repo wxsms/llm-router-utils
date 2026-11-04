@@ -344,8 +344,29 @@ python -c "import urllib.request, json; d=json.load(urllib.request.urlopen('http
 - **"No change needed" for slimmed files**: if every upstream change lands in already-stripped inference-engine code (scheduling, dispatch, metrics, cuda-graph, etc.), the slimmed version needs no change. Verify this file-by-file.
 - **Stale dependency pins after an upgrade**: bumping the submodule does not update `pyproject.toml`. Always run the pin diff in Step 3.5 — a missed pin (like `transformers==5.12.1` surviving three upstream bumps) silently tests against an old library version.
 - **Capabilities extracted into compiled platform-specific packages**: check upstream's `pyproject.toml` for new pins guarded by `sys_platform` / `platform_machine` markers. v0.5.23 moved DeepSeek-V4/V4.1 encoding into `deepseek-recipe` and Inkling rendering into `tml-renderers`; neither ships a Windows wheel. Mirror the marker exactly — do not silently promote such a package to an install-required dependency.
-- **Tests that import a newly-extracted package**: guard the class with `unittest.skipUnless(<package imports>, "...")` rather than deleting the test. See `test/unit/parser/test_inkling_renderer.py` and `test/unit/function_call/test_deepseekv41_detector.py`.
+- **Tests that import a newly-extracted package**: sync the test from upstream first, then guard each class that reaches the extension with `unittest.skipUnless(<package imports>, "...")`. Guard the *whole* file's dependency surface — a module-level helper (e.g. `_ids()` calling `load_tml_renderers()`) can drag a second class into the dependency even when the class body looks independent. See `test/unit/parser/test_inkling_renderer.py` and `test/unit/function_call/test_deepseekv41_detector.py`.
+- **Do not leave a test at the old version when the code under test changed**: a stale test plus a `skipUnless` guard is the worst combination — it looks protected, passes green everywhere the extension is absent, and silently drops the golden-reference assertions where it is present. Compare method sets against upstream (`python - <<` an AST diff) after every sync.
 - **Upstream test fixtures that assume `msgspec.Struct`**: this repo's `ServerArgs` is a plain dataclass, so `msgspec.Struct.__setattr__(args, ...)` must become `object.__setattr__(args, ...)` when syncing a test.
+- **JSON/`.jinja` fixtures copied via PowerShell**: `>` and `Out-File` emit UTF-16/BOM, which breaks `json.loads` and jinja reads with a `UnicodeDecodeError`. Always re-encode as UTF-8 without BOM (`[System.IO.File]::WriteAllText(path, text, (New-Object System.Text.UTF8Encoding($false)))`) and diff against the upstream fixture to confirm.
+
+## Shim Fidelity
+
+The hand-written shims (`runtime_context.py`, `arg_groups/*`, `sampling/sampling_params.py`) are the highest-risk part of any upgrade, because `check-parity` can only see that they are *different* — not that they are *wrong*. Two failure modes have already occurred; guard against both:
+
+1. **Hand-maintained allowlists drift.** `_ServingConfig` originally listed the serving fields explicitly and omitted `hf_chat_template_name`, which silently downgraded every model with a dict of named HF chat templates (the `AttributeError` was swallowed by an upstream `except Exception` and degraded to a warning). Shims must **pass through to the real object** and use a defaults dict only when nothing is installed, so an upstream rename fails loudly once instead of silently forever.
+2. **API-shaped but behaviourally wrong.** `resolving_view()` returned a read-only proxy but dropped upstream's live re-read of `_resolved_overrides`, making `resolve_auto_parsers`' declarations invisible. When slimming a class, port the `__getattr__` body, not just the shape.
+
+**Before merging any upgrade**, grep the retained tree for every attribute read off each shim and assert it resolves:
+
+```python
+# e.g. for runtime_context
+import re, pathlib
+src = pathlib.Path("src/llm_router_utils/sglang/srt/entrypoints/openai/serving_chat.py").read_text()
+for f in set(re.findall(r"get_serving\(\)\.(\w+)", src)):
+    getattr(get_serving(), f)          # raises if the shim is missing it
+```
+
+Also assert the *wiring* exists: a shim whose setter has zero callers fails closed at runtime. `set_runtime_context` must be called from `TokenizerManager.init_model_config` before `OpenAIServingChat` reads `get_model()`.
 
 ## Upgrade Deviations
 

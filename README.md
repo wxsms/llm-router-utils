@@ -53,7 +53,10 @@ Migrated modules under `llm_router_utils/sglang/srt/` (paths preserved from upst
 |---|---|
 | `parser/` | Conversation templates (~50 model families), `ReasoningParser` + detectors, harmony/inkling, jinja utils, template detection, `TemplateManager` with `TokenizerLike` Protocol |
 | `function_call/` | `FunctionCallParser` + 34 detectors (hermes, glm, deepseek, qwen, kimi, mistral, muse-glimmer, …), `JsonArrayParser`, schema utils |
-| `entrypoints/openai/` | `protocol.py` (~1900 lines, full OpenAI types), slimmed `serving_chat.py` (only `_process_messages` chain), `serving_base.py`, `chat_encoding.py`, `encoding_dsv32/dsv4.py`, `sse_utils.py`, `usage_processor.py`, `utils.py` |
+| `entrypoints/openai/` | `protocol.py` (full OpenAI types), `serving_chat.py` (verbatim from upstream), `serving_base.py`, `chat_encoding.py` + `chat_encoding_adapters.py`, `encoding_dsv32.py`, `serving_deepseek_recipe.py`, `serving_inkling.py`, `parallel_prompt_encode.py`, `sse_utils.py`, `usage_processor.py`, `utils.py` |
+| `parser/chat_parsing/` | Response-template parsers (`response_parser.py`, `content_parsers.py`, `response_templates.py`) backing the template tool-call/reasoning detectors |
+| `parser/response_template.py` | `ResponseTemplate*Detector` family plus response-template request configuration and grammar helpers |
+| `function_call/response_template_structural_tag.py` | Structural tags derived from a chat template's own framing; used by `beam_detector.py` |
 | `managers/` | Slimmed `TokenizerManager` (uses upstream `get_tokenizer` for byte-parity incl. `SGLANG_PATCH_TOKENIZER`), slimmed `io_struct.py`, `embed_types.py` stub |
 | `configs/` | Slimmed `ModelConfig` (uses upstream `get_config`; exposes `hf_config`/`is_multimodal`/`get_default_sampling_params`/`context_length`), `model_config_parser_registry.py` |
 | `tokenizer/` | `tiktoken_tokenizer.py` |

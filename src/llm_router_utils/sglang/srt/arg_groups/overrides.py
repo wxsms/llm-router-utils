@@ -38,7 +38,14 @@ from typing import Any
 
 
 class ResolvingView:
-    """Read-only attribute proxy over a ``ServerArgs``-like object."""
+    """Live view of declarations over raw inputs.
+
+    Mirrors upstream's ``ResolvingConfig``: every read replays the
+    ``_resolved_overrides`` stash, so declarations made *after* the view was
+    constructed are still observed. A plain passthrough proxy would silently
+    hide ``resolve_auto_parsers``' decisions from the callers that consult a
+    view — the exact drift this module exists to avoid.
+    """
 
     __slots__ = ("_target",)
 
@@ -46,14 +53,22 @@ class ResolvingView:
         object.__setattr__(self, "_target", target)
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(object.__getattribute__(self, "_target"), name)
+        target = object.__getattribute__(self, "_target")
+        for _source, declared in reversed(
+            getattr(target, "_resolved_overrides", None) or ()
+        ):
+            if name in declared:
+                return declared[name]
+        return getattr(target, name)
 
     def __setattr__(self, name: str, value: Any) -> None:
-        raise AttributeError(f"{type(self).__name__} is read-only")
+        raise AttributeError(
+            "ResolvingView is read-only; resolution writes through declarations"
+        )
 
 
 def resolving_view(target: Any) -> ResolvingView:
-    """Return a read-only resolving view over ``target``."""
+    """A live read view of what resolution has decided so far."""
     return ResolvingView(target)
 
 

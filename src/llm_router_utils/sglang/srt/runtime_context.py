@@ -52,15 +52,22 @@ def set_runtime_context(
 
 
 class _ServingConfig:
-    """Read-only view of the serving-related ``ServerArgs`` fields."""
+    """Read-only view of the serving-related ``ServerArgs`` fields.
+
+    Reads fall through to the installed ``ServerArgs`` so that *any* field the
+    retained layer asks for resolves, exactly as upstream's namespace bag does.
+    Maintaining a hand-written allowlist here is what previously dropped
+    ``hf_chat_template_name`` and silently cost models their HF chat template.
+    """
 
     __slots__ = ("_args",)
 
-    #: Upstream defaults, used when no ServerArgs has been installed.
+    #: Values used only when no ServerArgs has been installed yet.
     _DEFAULTS = {
         "allow_auto_truncate": False,
         "default_chat_template_kwargs": None,
         "enable_cache_report": False,
+        "hf_chat_template_name": None,
         "incremental_streaming_output": False,
         "return_input_ids": False,
         "return_output_ids": False,
@@ -72,12 +79,13 @@ class _ServingConfig:
         self._args = args
 
     def __getattr__(self, name: str) -> Any:
-        if name not in _ServingConfig._DEFAULTS:
-            raise AttributeError(name)
         args = object.__getattribute__(self, "_args")
-        if args is None:
+        if args is not None and hasattr(args, name):
+            return getattr(args, name)
+        try:
             return _ServingConfig._DEFAULTS[name]
-        return getattr(args, name, _ServingConfig._DEFAULTS[name])
+        except KeyError:
+            raise AttributeError(name) from None
 
 
 class _ModelConfigView:
