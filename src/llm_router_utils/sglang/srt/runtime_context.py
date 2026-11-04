@@ -17,52 +17,103 @@
 # ==============================================================================
 """Minimal stand-in for sglang.srt.runtime_context.
 
-Upstream's ``runtime_context`` is a 2,200-line server-args projection layer
+Upstream's ``runtime_context`` is a ~2,200-line server-args projection layer
 (arg_groups namespaces, role-scoped reads, Dynamo-friendly config bags) used by
 the scheduler, the model executor and the HTTP server. None of that machinery
 survives this repo's extraction: the retained serving layer only needs
 read-only access to a handful of *serving* settings and *model* attributes.
 
-This module therefore exposes the same two accessors ``serving_chat`` uses —
-:func:`get_serving` and :func:`get_model` — backed by plain attribute proxies
-over the ``ServerArgs`` and ``ModelConfig`` this repo already carries.
+Two accessors are exposed — :func:`get_serving` and :func:`get_model` — backed by
+attribute proxies over the ``ServerArgs`` and ``ModelConfig`` this repo already
+carries.
 
-Both accessors resolve lazily from the process-level context that
-``set_runtime_context`` installs, falling back to defaults so that importing the
-package never requires a server to be configured.
+Scoping
+-------
+A router serves several models from one process, and it constructs one
+``OpenAIServingChat`` (and one ``TokenizerManager``) per model. A single
+process-global slot would make the last-constructed model win, silently serving
+model A with model B's settings. So there are two levels:
+
+* :func:`set_runtime_context` registers the **process default** (used for
+  import-time reads and single-model services);
+* :func:`use_runtime_context` binds a **scope** (a ``ContextVar``) that both
+  accessors prefer while active.
+
+``OpenAIServingChat`` enters a scope for its own manager, so concurrent
+instances each read their own config.
 """
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Any, Iterator, Optional
 
+_UNSET = object()
+
+#: Process-level default, registered by TokenizerManager.
 _SERVER_ARGS: Optional[Any] = None
 _MODEL_CONFIG: Optional[Any] = None
 
+#: Per-scope binding; prefers over the process default while set.
+_SCOPED: ContextVar[Optional[tuple]] = ContextVar("sglang_runtime_context", default=None)
+
 
 def set_runtime_context(
-    *, server_args: Optional[Any] = None, model_config: Optional[Any] = None
+    *,
+    server_args: Any = _UNSET,
+    model_config: Any = _UNSET,
 ) -> None:
-    """Install the process-level config used by :func:`get_serving`/:func:`get_model`."""
+    """Register the process-level default config.
+
+    Pass ``None`` explicitly to clear a slot. Omitting an argument leaves it
+    unchanged — so cleanup code must pass ``None`` (it used to be a no-op).
+    """
     global _SERVER_ARGS, _MODEL_CONFIG
-    if server_args is not None:
+    if server_args is not _UNSET:
         _SERVER_ARGS = server_args
-    if model_config is not None:
+    if model_config is not _UNSET:
         _MODEL_CONFIG = model_config
+
+
+def reset_runtime_context() -> None:
+    """Drop the process-level default entirely (test teardown)."""
+    global _SERVER_ARGS, _MODEL_CONFIG
+    _SERVER_ARGS = None
+    _MODEL_CONFIG = None
+
+
+@contextmanager
+def use_runtime_context(
+    *, server_args: Any = None, model_config: Any = None
+) -> Iterator[None]:
+    """Bind config for the duration of the block, restoring on exit."""
+    token = _SCOPED.set((server_args, model_config))
+    try:
+        yield
+    finally:
+        _SCOPED.reset(token)
+
+
+def _resolve(name: str) -> Any:
+    scoped = _SCOPED.get()
+    if scoped is not None:
+        return scoped[0] if name == "server_args" else scoped[1]
+    return _SERVER_ARGS if name == "server_args" else _MODEL_CONFIG
 
 
 class _ServingConfig:
     """Read-only view of the serving-related ``ServerArgs`` fields.
 
-    Reads fall through to the installed ``ServerArgs`` so that *any* field the
+    Reads fall through to the bound ``ServerArgs`` so that *any* field the
     retained layer asks for resolves, exactly as upstream's namespace bag does.
-    Maintaining a hand-written allowlist here is what previously dropped
-    ``hf_chat_template_name`` and silently cost models their HF chat template.
+    A hand-written allowlist here previously dropped ``hf_chat_template_name``
+    and silently cost models their HF chat template.
     """
 
     __slots__ = ("_args",)
 
-    #: Values used only when no ServerArgs has been installed yet.
+    #: Values used only when no ServerArgs has been bound.
     _DEFAULTS = {
         "allow_auto_truncate": False,
         "default_chat_template_kwargs": None,
@@ -106,8 +157,8 @@ class _ModelConfigView:
 
 
 def get_serving() -> _ServingConfig:
-    return _ServingConfig(_SERVER_ARGS)
+    return _ServingConfig(_resolve("server_args"))
 
 
 def get_model() -> _ModelConfigView:
-    return _ModelConfigView(_MODEL_CONFIG)
+    return _ModelConfigView(_resolve("model_config"))

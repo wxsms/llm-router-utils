@@ -33,6 +33,13 @@ logger = logging.getLogger(__name__)
 # Fields the manager owns rather than reading from the resolved config tree.
 _MANAGER_OWNED_FIELDS = ("model_path", "served_model_name")
 
+#: Fields that exist upstream only as a *declaration* (no ServerArgs attribute).
+#: ``serving_hook.handle_grammar_backend`` declares ``"xgrammar"`` when the
+#: structured-output backend is enabled; the slimmed ServerArgs omits the field
+#: entirely, so without this ``config_value("grammar_backend")`` is None and
+#: ``serving_chat._template_turn_grammar()`` is permanently off.
+_DECLARED_ONLY_DEFAULTS = {"grammar_backend": "xgrammar"}
+
 
 class TokenizerManager:
     """Minimal TokenizerManager that loads a tokenizer + model config.
@@ -56,25 +63,37 @@ class TokenizerManager:
     def config_value(self, name: str):
         """The value in effect for one config field.
 
-        Upstream reads through the published runtime context
-        (``get_context().config_leaf(name)``); this repo has no publication
-        layer, so the slimmed ``ServerArgs`` dataclass *is* the resolved config.
+        Upstream reads ``get_context().config_leaf(name)``, i.e. the *resolved*
+        leaf, so a declaration made by detection wins over the raw input. The
+        declaration stash is this repo's equivalent, so it must be consulted
+        first: reading the dataclass field alone silently returned ``"auto"``
+        for every ``--*-parser auto`` field and disabled tool-call parsing.
+
+        ``grammar_backend`` only ever exists as a declaration upstream
+        (``serving_hook.handle_grammar_backend``) and is absent from the slimmed
+        ``ServerArgs``, hence the fallback table.
         """
         if name in _MANAGER_OWNED_FIELDS:
             return getattr(self, name)
-        if hasattr(self.server_args, name):
-            return getattr(self.server_args, name)
         from llm_router_utils.sglang.srt.arg_groups.overrides import (
             resolution_result,
         )
 
-        return resolution_result(self.server_args, name)
+        return resolution_result(
+            self.server_args, name, _DECLARED_ONLY_DEFAULTS.get(name)
+        )
 
     def init_model_config(self) -> None:
         self.model_path = self.server_args.model_path
+        # Upstream sets this on the manager (tokenizer_manager.py, from the
+        # published serving config) and serving_chat reads it directly when it
+        # renames the model for a reasoning-effort rewrite. ServerArgs defaults
+        # it to model_path in __post_init__, so this is never None.
+        self.served_model_name = self.server_args.served_model_name
         self.model_config = ModelConfig(
             model_path=self.server_args.model_path,
             trust_remote_code=self.server_args.trust_remote_code,
+            revision=self.server_args.revision,
             context_length=self.server_args.context_length,
         )
         # Mirrors upstream TokenizerManager: read from the model config so the
@@ -83,8 +102,13 @@ class TokenizerManager:
         self.image_token_id = self.model_config.image_token_id
         # Upstream publishes the resolved config to a process-wide runtime
         # context before serving; that is what backs serving_chat's
-        # get_model()/get_serving() reads. There is no publication layer here,
-        # so install the pieces those accessors need as soon as they exist.
+        # get_model()/get_serving() reads. Register it so those accessors do
+        # not fail closed for the dsv4/dsv41/inkling encoding adapters.
+        #
+        # NOTE: this is a process-level default. With several managers in one
+        # process it is last-writer-wins, so a multi-model router that needs
+        # per-instance isolation must wrap request handling in
+        # ``use_runtime_context(...)``. See runtime_context's module docstring.
         set_runtime_context(
             server_args=self.server_args, model_config=self.model_config
         )

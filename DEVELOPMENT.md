@@ -403,13 +403,34 @@ upstream wholesale on later upgrades.
 | `srt/arg_groups/` | CLI/env/model-override resolution machinery | resolution stash (`declare_resolution` / `resolution_result`) + read-only resolving view |
 | `srt/sampling/sampling_params.py` | full `SamplingParams` struct + watermark validation (torch) | the two private request-transport helpers `serving_chat` uses |
 
-`managers/tokenizer_manager.py` gained a `config_value()` method returning
-`ServerArgs` fields directly, in place of upstream's `get_context().config_leaf()`.
+`managers/tokenizer_manager.py` gained a `config_value()` method returning the
+*resolved* value — it consults the declaration stash via `resolution_result`, not
+just the raw `ServerArgs` field. Reading the raw field silently returned `"auto"`
+for every `--*-parser auto` field, disabling tool-call parsing and turn grammar.
+`_DECLARED_ONLY_DEFAULTS` covers fields that exist upstream only as a
+declaration (`grammar_backend` → `"xgrammar"`).
+
+`runtime_context` keeps two levels: `set_runtime_context(...)` registers the
+process default (last writer wins), and `use_runtime_context(...)` binds a
+`ContextVar` scope that both accessors prefer. Pass `None` explicitly to clear a
+slot — omitting an argument leaves it unchanged. Multi-model routers must wrap
+request handling in `use_runtime_context` for the served model.
 
 Because these shims are in the baseline, `check-parity` will report them as
 "baselined" rather than failing. Review them by hand when upstream touches the
 corresponding real modules, and widen a shim only when a retained caller needs
 more of the upstream surface.
+
+## Release Checklist Addition
+
+Before tagging, confirm for every upgrade that removes or gates a capability:
+
+- [ ] README has an explicit **breaking change** note naming the version it
+      changed in and what users lose (e.g. `dsv4`/`dsv41` on Windows in v0.9.0).
+- [ ] Deleted public module paths are called out by name.
+- [ ] Any new platform-gated extra records the Python floor its wheels impose
+      (`tml-renderers` is `cp311-abi3`, so the `inkling` extra needs >= 3.11
+      even though the base package supports 3.10).
 
 ## Version Table
 

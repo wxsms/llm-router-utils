@@ -17,8 +17,8 @@ retained tree reads off the shims and asserts it resolves, so a future upstream
 rename fails here rather than silently in production.
 """
 
+import ast
 import pathlib
-import re
 import unittest
 from unittest.mock import patch
 
@@ -30,7 +30,9 @@ from llm_router_utils.sglang.srt.arg_groups.overrides import (
 from llm_router_utils.sglang.srt.runtime_context import (
     get_model,
     get_serving,
+    reset_runtime_context,
     set_runtime_context,
+    use_runtime_context,
 )
 from llm_router_utils.sglang.srt.server_args import PortArgs, ServerArgs
 
@@ -44,11 +46,60 @@ _SRT = (
 
 
 def _attributes_read_off(root_name: str) -> set[str]:
-    """Every ``<root_name>().attr`` read across the retained tree."""
+    """Attribute names read off a shim accessor, found by walking the AST.
+
+    A regex only saw the inline ``get_serving().attr`` shape and missed
+    ``serving = get_serving(); serving.attr`` and
+    ``getattr(get_serving(), "attr")``. This walks ``Attribute``/``getattr``
+    nodes whose value is a direct call to ``root_name``.
+    """
     found: set[str] = set()
     for path in _SRT.rglob("*.py"):
-        text = path.read_text(encoding="utf-8")
-        found |= set(re.findall(rf"{root_name}\(\)\.(\w+)", text))
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except SyntaxError:  # pragma: no cover
+            continue
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Name)
+                and node.value.func.id == root_name
+            ):
+                found.add(node.attr)
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "getattr"
+                and len(node.args) >= 2
+                and isinstance(node.args[0], ast.Call)
+                and isinstance(node.args[0].func, ast.Name)
+                and node.args[0].func.id == root_name
+                and isinstance(node.args[1], ast.Constant)
+                and isinstance(node.args[1].value, str)
+            ):
+                found.add(node.args[1].value)
+    return found
+
+
+def _config_value_keys() -> set[str]:
+    """Field names passed to ``TokenizerManager.config_value("...")``."""
+    found: set[str] = set()
+    for path in _SRT.rglob("*.py"):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except SyntaxError:  # pragma: no cover
+            continue
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "config_value"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+            ):
+                found.add(node.args[0].value)
     return found
 
 
@@ -149,7 +200,7 @@ class TestRuntimeContextWiring(unittest.TestCase):
             model_config_cls.return_value.revision = "rev-9"
             model_config_cls.return_value.context_length = 8192
             model_config_cls.return_value.image_token_id = None
-            tmm.TokenizerManager(ServerArgs(model_path="dummy"), PortArgs())
+            tmm.TokenizerManager(ServerArgs(model_path="dummy", skip_tokenizer_init=True), PortArgs())
 
         # get_model() must no longer fail closed.
         self.assertEqual(get_model().revision, "rev-9")
@@ -165,7 +216,7 @@ class TestRuntimeContextWiring(unittest.TestCase):
             for name in names:
                 setattr(model_config_cls.return_value, name, "value-" + name)
             model_config_cls.return_value.image_token_id = None
-            tmm.TokenizerManager(ServerArgs(model_path="dummy"), PortArgs())
+            tmm.TokenizerManager(ServerArgs(model_path="dummy", skip_tokenizer_init=True), PortArgs())
 
         for name in sorted(names):
             with self.subTest(attribute=name):
@@ -196,6 +247,166 @@ class TestResolvingViewIsLive(unittest.TestCase):
         declare_resolution(args, "first", reasoning_parser="a")
         declare_resolution(args, "second", reasoning_parser="b")
         self.assertEqual(resolution_result(args, "reasoning_parser"), "b")
+
+
+class TestManagerSurface(unittest.TestCase):
+    """Defect C1: attributes serving_chat reads straight off the manager."""
+
+    def test_every_manager_attribute_read_exists(self):
+        """Any *reachable* ``tokenizer_manager.<attr>`` read must exist.
+
+        ``serving_chat.py`` is byte-identical to upstream, so it still contains
+        the request-*serving* methods (``generate_request``, ``create_abort_task``,
+        streaming) that this repo strips at the base class. Those are not
+        reachable from the public entry point, so they are excluded here.
+        """
+        unreachable = {
+            "create_abort_task",  # used by stripped OpenAIServingBase.handle_request
+            "generate_request",  # ditto; also the streaming generator
+        }
+        reads: set[str] = set()
+        for path in _SRT.rglob("*.py"):
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+            except SyntaxError:  # pragma: no cover
+                continue
+            for node in ast.walk(tree):
+                if (
+                    isinstance(node, ast.Attribute)
+                    and isinstance(node.value, ast.Attribute)
+                    and node.value.attr == "tokenizer_manager"
+                ):
+                    reads.add(node.attr)
+        reads -= unreachable
+        self.assertGreater(len(reads), 0, "no tokenizer_manager reads discovered")
+
+        import llm_router_utils.sglang.srt.managers.tokenizer_manager as tmm
+
+        with patch.object(tmm, "ModelConfig") as model_config_cls:
+            model_config_cls.return_value.image_token_id = None
+            manager = tmm.TokenizerManager(
+                ServerArgs(
+                    model_path="m",
+                    served_model_name="alias",
+                    skip_tokenizer_init=True,
+                ),
+                PortArgs(),
+            )
+        for name in sorted(reads):
+            with self.subTest(attribute=name):
+                self.assertTrue(
+                    hasattr(manager, name),
+                    f"TokenizerManager is missing {name!r}, read by serving code",
+                )
+
+    def test_served_model_name_defaults_to_model_path(self):
+        import llm_router_utils.sglang.srt.managers.tokenizer_manager as tmm
+
+        with patch.object(tmm, "ModelConfig") as model_config_cls:
+            model_config_cls.return_value.image_token_id = None
+            manager = tmm.TokenizerManager(
+                ServerArgs(model_path="m", skip_tokenizer_init=True), PortArgs()
+            )
+        self.assertEqual(manager.served_model_name, "m")
+
+    def test_revision_reaches_the_model_config(self):
+        import llm_router_utils.sglang.srt.managers.tokenizer_manager as tmm
+
+        with patch.object(tmm, "ModelConfig") as model_config_cls:
+            model_config_cls.return_value.image_token_id = None
+            tmm.TokenizerManager(
+                ServerArgs(
+                    model_path="m", revision="refs/pr/42", skip_tokenizer_init=True
+                ),
+                PortArgs(),
+            )
+        self.assertEqual(model_config_cls.call_args.kwargs.get("revision"), "refs/pr/42")
+
+
+class TestConfigValueResolution(unittest.TestCase):
+    """Defect C2: ``config_value`` must return the *resolved* value."""
+
+    def _manager(self, **kwargs):
+        import llm_router_utils.sglang.srt.managers.tokenizer_manager as tmm
+
+        with patch.object(tmm, "ModelConfig") as model_config_cls:
+            model_config_cls.return_value.image_token_id = None
+            return tmm.TokenizerManager(
+                ServerArgs(model_path="m", skip_tokenizer_init=True, **kwargs), PortArgs()
+            )
+
+    def test_declaration_wins_over_raw_input(self):
+        manager = self._manager(tool_call_parser="auto", reasoning_parser="auto")
+        declare_resolution(
+            manager.server_args,
+            "detection",
+            tool_call_parser="qwen",
+            reasoning_parser="qwen3",
+        )
+        self.assertEqual(manager.config_value("tool_call_parser"), "qwen")
+        self.assertEqual(manager.config_value("reasoning_parser"), "qwen3")
+
+    def test_undeclared_field_falls_back_to_raw_input(self):
+        manager = self._manager(tool_call_parser="hermes")
+        self.assertEqual(manager.config_value("tool_call_parser"), "hermes")
+
+    def test_grammar_backend_has_a_declared_default(self):
+        manager = self._manager()
+        self.assertEqual(manager.config_value("grammar_backend"), "xgrammar")
+
+    def test_every_config_value_key_resolves_to_a_usable_value(self):
+        """Generic guard over the keys the retained tree actually asks for.
+
+        ``None`` is legitimate for the parser fields (it means "no parser");
+        what must never happen is ``"auto"`` leaking through, which is the
+        unresolved sentinel that silently disables parsing.
+        """
+        keys = _config_value_keys()
+        self.assertGreater(len(keys), 0, "no config_value() reads discovered")
+        manager = self._manager()
+        for name in sorted(keys):
+            with self.subTest(field=name):
+                self.assertNotEqual(
+                    manager.config_value(name),
+                    "auto",
+                    f"config_value({name!r}) returned the unresolved 'auto' sentinel",
+                )
+
+
+class TestRuntimeContextScoping(unittest.TestCase):
+    """Defects C3/C4: per-instance isolation and clearable state."""
+
+    def tearDown(self):
+        reset_runtime_context()
+
+    def test_none_clears_the_slot(self):
+        set_runtime_context(
+            server_args=ServerArgs(model_path="a", hf_chat_template_name="tool_use")
+        )
+        self.assertEqual(get_serving().hf_chat_template_name, "tool_use")
+        set_runtime_context(server_args=None)
+        self.assertIsNone(get_serving().hf_chat_template_name)
+
+    def test_reset_runtime_context_clears_everything(self):
+        set_runtime_context(server_args=ServerArgs(model_path="a"))
+        reset_runtime_context()
+        self.assertIsNone(get_serving().hf_chat_template_name)
+
+    def test_omitted_argument_leaves_slot_unchanged(self):
+        set_runtime_context(server_args=ServerArgs(model_path="a", hf_chat_template_name="x"))
+        set_runtime_context(model_config=None)  # server_args omitted -> unchanged
+        self.assertEqual(get_serving().hf_chat_template_name, "x")
+
+    def test_scope_overrides_process_default_for_its_duration(self):
+        """A multi-model router must be able to read each model's own config."""
+        a = ServerArgs(model_path="A", hf_chat_template_name="tool_use")
+        b = ServerArgs(model_path="B", hf_chat_template_name=None)
+        set_runtime_context(server_args=b)  # B registered last: process default
+
+        with use_runtime_context(server_args=a):
+            self.assertEqual(get_serving().hf_chat_template_name, "tool_use")
+        # restored to the process default afterwards
+        self.assertIsNone(get_serving().hf_chat_template_name)
 
 
 if __name__ == "__main__":

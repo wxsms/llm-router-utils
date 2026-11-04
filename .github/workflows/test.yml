@@ -49,10 +49,24 @@ jobs:
         run: |
           # A skip here means the wheel was missing, so the golden-reference
           # assertions never executed and the step would pass vacuously.
+          # pipefail: without it `... | tee` reports tee's (always 0) status.
+          set -o pipefail
           PYTHONPATH=src python -m pytest test/unit/parser/test_inkling_renderer.py \
             -q -rs --no-header | tee /tmp/inkling.txt
           if grep -qE '[0-9]+ skipped' /tmp/inkling.txt; then
-            echo "::error::inkling tests skipped — the tml-renderers wheel was not installed"
+            echo "::error::inkling tests skipped - tml-renderers wheel not installed"
+            exit 1
+          fi
+
+      - name: DeepSeek-V4.1 tests must run, not skip
+        run: |
+          # deepseek-recipe is a hard dependency on Linux, so these must execute.
+          set -o pipefail
+          PYTHONPATH=src python -m pytest \
+            test/unit/function_call/test_deepseekv41_detector.py \
+            -q -rs --no-header | tee /tmp/dsv41.txt
+          if grep -qE '[0-9]+ skipped' /tmp/dsv41.txt; then
+            echo "::error::deepseekv41 tests skipped - deepseek-recipe wheel not installed"
             exit 1
           fi
 

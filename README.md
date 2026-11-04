@@ -52,7 +52,7 @@ Migrated modules under `llm_router_utils/sglang/srt/` (paths preserved from upst
 | Module | Description |
 |---|---|
 | `parser/` | Conversation templates (~50 model families), `ReasoningParser` + detectors, harmony/inkling, jinja utils, template detection, `TemplateManager` with `TokenizerLike` Protocol |
-| `function_call/` | `FunctionCallParser` + 34 detectors (hermes, glm, deepseek, qwen, kimi, mistral, muse-glimmer, …), `JsonArrayParser`, schema utils |
+| `function_call/` | `FunctionCallParser` + 44 detectors (hermes, glm, deepseek, qwen, kimi, mistral, muse-glimmer, …), `JsonArrayParser`, schema utils |
 | `entrypoints/openai/` | `protocol.py` (full OpenAI types), `serving_chat.py` (verbatim from upstream), `serving_base.py`, `chat_encoding.py` + `chat_encoding_adapters.py`, `encoding_dsv32.py`, `serving_deepseek_recipe.py`, `serving_inkling.py`, `parallel_prompt_encode.py`, `sse_utils.py`, `usage_processor.py`, `utils.py` |
 | `parser/chat_parsing/` | Response-template parsers (`response_parser.py`, `content_parsers.py`, `response_templates.py`) backing the template tool-call/reasoning detectors |
 | `parser/response_template.py` | `ResponseTemplate*Detector` family plus response-template request configuration and grammar helpers |
@@ -105,6 +105,38 @@ platform markers. This package mirrors those markers, so on Windows the rest of
 the API loads and works normally while `dsv4`/`dsv41`/`inkling` encodings raise
 an `ImportError` naming the missing package. Install on Linux or macOS if you
 need those encoders.
+
+Two caveats on that `ImportError`:
+
+- For `dsv4`/`dsv41`, a checkpoint whose tokenizer has no `tokenizer.json` fails
+  earlier with `ValueError: deepseek-recipe needs the checkpoint's fast
+  tokenizer`, because the tokenizer check precedes the package import. Use a
+  fast-tokenizer checkpoint to see the missing-package message.
+- `tml-renderers` publishes `cp311-abi3` wheels only, so the `inkling` extra
+  requires **Python >= 3.11** even though the base package supports 3.10.
+
+`dsv4`/`dsv41`/`inkling` are unavailable on Windows in this release. That is a
+**capability removal** relative to `v0.8.x`, which shipped in-tree encoders for
+`dsv4`/`dsv41`; it follows upstream sglang v0.5.23. The old
+`encoding_dsv4.py`/`encoding_dsv41.py` module paths no longer exist.
+
+### Serving several models from one process
+
+Each `TokenizerManager` registers its config as a process-level default, so the
+last one constructed wins. A router that serves multiple models through this
+package should scope request handling to the model being served:
+
+```python
+from llm_router_utils.sglang.srt.runtime_context import use_runtime_context
+
+with use_runtime_context(server_args=model_a.server_args,
+                         model_config=model_a.model_config):
+    ...  # get_serving() / get_model() read model A's config here
+```
+
+Without that, `get_serving()`/`get_model()` reflect whichever manager was built
+last (for example a model's configured `hf_chat_template_name` would be ignored).
+
 
 
 ## License

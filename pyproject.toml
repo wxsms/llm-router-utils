@@ -37,6 +37,10 @@ dependencies = [
   "msgspec",
   "regex",
   "fastapi",
+  # serving_chat.py imports Draft202012Validator at module level (tool-parameter
+  # schema validation). Upstream gets it transitively via mistral_common; this
+  # repo imports it directly, so it is declared here (DEVELOPMENT.md Step 3.5).
+  "jsonschema",
   "xgrammar==0.2.7",
   "json_repair",
   # DeepSeek-V4 / V4.1 prompt encoding and output parsing moved out of sglang
