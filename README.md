@@ -101,24 +101,52 @@ platform-specific extensions:
 | Inkling rendering | `tml-renderers` (`inkling` extra) | Linux (x86_64, aarch64), macOS arm64 |
 
 Neither publishes a Windows wheel, and upstream pins both with matching
-platform markers. This package mirrors those markers, so on Windows the rest of
-the API loads and works normally while `dsv4`/`dsv41`/`inkling` encodings raise
-an `ImportError` naming the missing package. Install on Linux or macOS if you
-need those encoders.
+platform markers. This package mirrors those markers, so on Windows these
+extensions are simply not installed and the affected encoders raise an
+`ImportError` naming the missing package.
 
-Two caveats on that `ImportError`:
+**Everything else is unaffected.** Both encoders are selected per model and
+imported lazily, so a service that serves any other model family — Llama, Qwen,
+GLM, Kimi, Hermes, Mistral, and so on — never touches either package and behaves
+exactly as before on every platform.
+
+#### When `dsv4` / `dsv41` is affected
+
+The DeepSeek-V4/V4.1 path is selected by exactly two things
+(`chat_encoding.resolve_chat_encoding_spec`): the model architecture, or an
+explicit parser flag.
+
+| Trigger | Example |
+|---|---|
+| The model architecture | `DeepseekV4ForCausalLM`, `DeepseekV41ForCausalLM` |
+| An explicit parser flag | `--tool-call-parser deepseekv4` / `deepseekv41` |
+
+| Model / setting | Encoding spec | Needs `deepseek-recipe` |
+|---|---|---|
+| `LlamaForCausalLM`, `Qwen2ForCausalLM`, `DeepseekV3ForCausalLM`, … | `None` | no |
+| `DeepseekV4ForCausalLM` | `dsv4` | yes |
+| `DeepseekV41ForCausalLM` | `dsv41` | yes |
+
+`deepseekv32` is **not** affected — DeepSeek-V3.2 still renders through the
+in-tree `encoding_dsv32.py`.
+
+So: **only serving a DeepSeek-V4/V4.1 checkpoint, or explicitly selecting that
+parser, is unavailable on Windows.** Everything else works normally.
+
+Two caveats on the `ImportError`:
 
 - For `dsv4`/`dsv41`, a checkpoint whose tokenizer has no `tokenizer.json` fails
   earlier with `ValueError: deepseek-recipe needs the checkpoint's fast
   tokenizer`, because the tokenizer check precedes the package import. Use a
   fast-tokenizer checkpoint to see the missing-package message.
-- `tml-renderers` publishes `cp311-abi3` wheels only, so the `inkling` extra
-  requires **Python >= 3.11** even though the base package supports 3.10.
+- `tml-renderers` publishes `cp311-abi3` wheels only and ships no sdist, so the
+  `inkling` extra requires **Python >= 3.11** even though the base package
+  supports 3.10.
 
-`dsv4`/`dsv41`/`inkling` are unavailable on Windows in this release. That is a
-**capability removal** relative to `v0.8.x`, which shipped in-tree encoders for
-`dsv4`/`dsv41`; it follows upstream sglang v0.5.23. The old
-`encoding_dsv4.py`/`encoding_dsv41.py` module paths no longer exist.
+Relative to `v0.8.x`, which shipped in-tree `dsv4`/`dsv41` encoders, this is a
+capability removal **scoped to those two architectures on Windows**; it follows
+upstream sglang v0.5.23. The `encoding_dsv4.py`/`encoding_dsv41.py` module paths
+no longer exist on any platform.
 
 ### Serving several models from one process
 
