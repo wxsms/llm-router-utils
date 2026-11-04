@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llm-router-utils"
-version = "0.8.1"
+version = "0.9.0"
 description = "Lightweight extraction of sglang's reasoning/tool-call parsers and chat template rendering for router services."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -30,23 +30,36 @@ dependencies = [
   "typing_extensions",
   "tiktoken",
   "transformers==5.19.0",
-  "openai==2.6.1",
+  "openai==2.8.0",
   "mistral_common>=1.11.5",
   "packaging",
   "huggingface_hub",
   "msgspec",
+  "regex",
+  "fastapi",
   "xgrammar==0.2.7",
   "json_repair",
+  # DeepSeek-V4 / V4.1 prompt encoding and output parsing moved out of sglang
+  # into DeepSeek's native `deepseek-recipe` package in sglang v0.5.23.
+  # Mirrors upstream's pin and platform marker: wheels exist for Linux
+  # (x86_64/aarch64) and macOS only, so the capability is unavailable on Windows.
+  "deepseek-recipe==0.2.0 ; (sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')) or sys_platform == 'darwin'",
 ]
+
+[project.optional-dependencies]
+fastokens = ["fastokens>=0.3.2"]
+# Inkling rendering delegates to TML's reference renderer. Upstream pins it with
+# the same platform marker as above (Linux x86_64/aarch64, macOS arm64); it also
+# requires PyTorch >= 2.10, which this package does not otherwise depend on.
+inkling = [
+  "tml-renderers==0.2.1 ; (sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')) or (sys_platform == 'darwin' and platform_machine == 'arm64')",
+]
+test = ["pytest", "pytest-cov"]
 
 [project.urls]
 Homepage = "https://github.com/wxsms/llm-router-utils"
 Source = "https://github.com/wxsms/llm-router-utils"
 Issues = "https://github.com/wxsms/llm-router-utils/issues"
-
-[project.optional-dependencies]
-fastokens = ["fastokens>=0.3.2"]
-test = ["pytest", "pytest-cov"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

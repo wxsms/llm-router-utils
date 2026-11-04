@@ -83,8 +83,26 @@ The mapping between this repo's releases and upstream sglang versions, so users 
 | `v0.7.0` | [v0.5.21](https://github.com/sgl-project/sglang/tree/release/v0.5.21) |
 | `v0.8.0` | [v0.5.22](https://github.com/sgl-project/sglang/tree/release/v0.5.22) |
 | `v0.8.1` | [v0.5.22](https://github.com/sgl-project/sglang/tree/release/v0.5.22) |
+| `v0.9.0` | [v0.5.23](https://github.com/sgl-project/sglang/tree/release/v0.5.23) |
 
 > See [DEVELOPMENT.md](DEVELOPMENT.md) for the development workflow (upgrades, checks, releases).
+
+### Platform note (since `v0.9.0`)
+
+sglang v0.5.23 moved two capabilities out of its own tree into compiled
+platform-specific extensions:
+
+| Capability | Package | Wheels |
+|---|---|---|
+| DeepSeek-V4 / V4.1 prompt encoding | `deepseek-recipe==0.2.0` | Linux (x86_64, aarch64), macOS |
+| Inkling rendering | `tml-renderers` (`inkling` extra) | Linux (x86_64, aarch64), macOS arm64 |
+
+Neither publishes a Windows wheel, and upstream pins both with matching
+platform markers. This package mirrors those markers, so on Windows the rest of
+the API loads and works normally while `dsv4`/`dsv41`/`inkling` encodings raise
+an `ImportError` naming the missing package. Install on Linux or macOS if you
+need those encoders.
+
 
 ## License
 

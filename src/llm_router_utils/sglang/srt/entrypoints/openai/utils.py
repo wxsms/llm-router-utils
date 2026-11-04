@@ -1,5 +1,10 @@
+# ==============================================================================
+# Derivative work: slimmed for llm-router-utils. See DEVELOPMENT.md.
+# Original copyright notice retained per Apache 2.0 §4(b)/§4(c).
+# ==============================================================================
 import logging
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Literal
+
 
 from llm_router_utils.sglang.srt.entrypoints.openai.protocol import (
     CachedTokensDetails,
@@ -170,7 +175,6 @@ def to_openai_style_logprobs(
         append_top_logprobs(output_top_logprobs)
 
     return ret_logprobs
-
 
 
 def _lossless_token_text(tokenizer, token_id, token_text):

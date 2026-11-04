@@ -46,12 +46,14 @@ class ImageData:
     max_dynamic_patch: Optional[int] = None
     preprocess_kwargs: Optional[Dict] = None
     content_hash: Optional[str] = None
+    max_long_side_pixel: Optional[int] = None
 
 
 @dataclass
 class VideoData:
     url: str
     preprocess_kwargs: Optional[Dict] = None
+    max_long_side_pixel: Optional[int] = None
 
 
 GLM_MEDIA_CONFIG_KEYS = (

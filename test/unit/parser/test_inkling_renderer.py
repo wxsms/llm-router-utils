@@ -1,20 +1,44 @@
 import unittest
 
-from llm_router_utils.sglang.srt.entrypoints.openai.chat_encoding import encode_simple_chat
-from llm_router_utils.sglang.srt.parser.inkling_renderer import render_inkling_messages
-from llm_router_utils.sglang.srt.parser.inkling_tokenizer import (
-    CONTENT_INVOKE_TOOL_JSON,
-    CONTENT_MODEL_END_SAMPLING,
-    CONTENT_TEXT,
-    CONTENT_THINKING,
-    CONTENT_XML,
-    END_MESSAGE,
-    INKLING_SPECIAL_TOKEN_IDS,
-    MESSAGE_MODEL,
-    MESSAGE_SYSTEM,
-    MESSAGE_USER,
+from llm_router_utils.sglang.srt.parser import inkling_renderer as _inkling_renderer
+
+# ``render_inkling_messages`` delegates to the optional ``tml-renderers``
+# extension, which upstream pins only for Linux and macOS. Guarding here keeps
+# the rest of the suite runnable on platforms without a wheel.
+try:
+    _inkling_renderer.load_tml_renderers()
+    _HAS_TML_RENDERERS = True
+except ImportError:
+    _HAS_TML_RENDERERS = False
+
+_REQUIRES_TML_RENDERERS = unittest.skipUnless(
+    _HAS_TML_RENDERERS,
+    "requires the optional `tml-renderers` package (no wheel for this platform)",
 )
 
+if _HAS_TML_RENDERERS:
+    from llm_router_utils.sglang.srt.entrypoints.openai.chat_encoding import (
+        encode_simple_chat,
+    )
+    from llm_router_utils.sglang.srt.parser.inkling_renderer import (
+        render_inkling_messages,
+    )
+    from llm_router_utils.sglang.srt.parser.inkling_tokenizer import (
+        CONTENT_INVOKE_TOOL_JSON,
+        CONTENT_MODEL_END_SAMPLING,
+        CONTENT_TEXT,
+        CONTENT_THINKING,
+        CONTENT_XML,
+        END_MESSAGE,
+        INKLING_SPECIAL_TOKEN_IDS,
+        MESSAGE_MODEL,
+        MESSAGE_SYSTEM,
+        MESSAGE_USER,
+    )
+
+
+def _text(value: str) -> list[int]:
+    return list(value.encode())
 
 
 def _text(value: str) -> list[int]:
@@ -48,6 +72,7 @@ def _block(role: str, kind: str, payload: str, author: str = "") -> list[int]:
     )
 
 
+@_REQUIRES_TML_RENDERERS
 class TestInklingRenderer(unittest.TestCase):
     def setUp(self):
         self.tokenizer = _InklingTokenizer()

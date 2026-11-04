@@ -343,6 +343,52 @@ python -c "import urllib.request, json; d=json.load(urllib.request.urlopen('http
 - **CRLF**: a Windows checkout produces CRLF line endings; use `diff --strip-trailing-cr` when comparing against upstream LF.
 - **"No change needed" for slimmed files**: if every upstream change lands in already-stripped inference-engine code (scheduling, dispatch, metrics, cuda-graph, etc.), the slimmed version needs no change. Verify this file-by-file.
 - **Stale dependency pins after an upgrade**: bumping the submodule does not update `pyproject.toml`. Always run the pin diff in Step 3.5 — a missed pin (like `transformers==5.12.1` surviving three upstream bumps) silently tests against an old library version.
+- **Capabilities extracted into compiled platform-specific packages**: check upstream's `pyproject.toml` for new pins guarded by `sys_platform` / `platform_machine` markers. v0.5.23 moved DeepSeek-V4/V4.1 encoding into `deepseek-recipe` and Inkling rendering into `tml-renderers`; neither ships a Windows wheel. Mirror the marker exactly — do not silently promote such a package to an install-required dependency.
+- **Tests that import a newly-extracted package**: guard the class with `unittest.skipUnless(<package imports>, "...")` rather than deleting the test. See `test/unit/parser/test_inkling_renderer.py` and `test/unit/function_call/test_deepseekv41_detector.py`.
+- **Upstream test fixtures that assume `msgspec.Struct`**: this repo's `ServerArgs` is a plain dataclass, so `msgspec.Struct.__setattr__(args, ...)` must become `object.__setattr__(args, ...)` when syncing a test.
+
+## Upgrade Deviations
+
+Deliberate, documented departures from upstream that a future upgrade must preserve.
+
+### v0.9.0 (sglang v0.5.23)
+
+Upstream v0.5.23 replaced its in-tree DeepSeek-V4/V4.1 encoders
+(`entrypoints/openai/encoding_dsv4.py`, `encoding_dsv41.py`) with DeepSeek's
+native `deepseek-recipe` extension, and routed Inkling through `tml-renderers`.
+Both are compiled, both lack Windows wheels, and both are pinned upstream behind
+platform markers.
+
+This repo follows upstream: the two vendored encoders were **deleted**, and
+`pyproject.toml` carries the same platform markers. Consequences:
+
+- `deepseek-recipe` is a **hard** dependency on Linux/macOS and absent on
+  Windows, where `dsv4`/`dsv41` encodings raise an `ImportError` naming the
+  package.
+- `tml-renderers` is an **optional** `inkling` extra, because it additionally
+  requires PyTorch >= 2.10, which this package otherwise avoids.
+- The corresponding tests are platform-guarded, not removed.
+
+### Stub modules
+
+Three upstream subsystems were replaced by minimal behavioural shims rather
+than being carried over. They are recorded in `scripts/parity_baseline.txt`, so
+the parity checker will not flag them; keep them slim rather than adopting
+upstream wholesale on later upgrades.
+
+| Module | Upstream | Shim |
+|---|---|---|
+| `srt/runtime_context.py` | ~2,200-line process-wide config publication layer (arg-group namespaces, role-scoped reads) | `get_serving()` / `get_model()` read-only proxies over `ServerArgs` / `ModelConfig` |
+| `srt/arg_groups/` | CLI/env/model-override resolution machinery | resolution stash (`declare_resolution` / `resolution_result`) + read-only resolving view |
+| `srt/sampling/sampling_params.py` | full `SamplingParams` struct + watermark validation (torch) | the two private request-transport helpers `serving_chat` uses |
+
+`managers/tokenizer_manager.py` gained a `config_value()` method returning
+`ServerArgs` fields directly, in place of upstream's `get_context().config_leaf()`.
+
+Because these shims are in the baseline, `check-parity` will report them as
+"baselined" rather than failing. Review them by hand when upstream touches the
+corresponding real modules, and widen a shim only when a retained caller needs
+more of the upstream surface.
 
 ## Version Table
 

@@ -29,6 +29,9 @@ from llm_router_utils.sglang.srt.server_args import PortArgs, ServerArgs
 
 logger = logging.getLogger(__name__)
 
+# Fields the manager owns rather than reading from the resolved config tree.
+_MANAGER_OWNED_FIELDS = ("model_path", "served_model_name")
+
 
 class TokenizerManager:
     """Minimal TokenizerManager that loads a tokenizer + model config.
@@ -49,10 +52,24 @@ class TokenizerManager:
         if not server_args.skip_tokenizer_init:
             self.init_tokenizer_and_processor()
 
+    def config_value(self, name: str):
+        """The value in effect for one config field.
+
+        Upstream reads through the published runtime context
+        (``get_context().config_leaf(name)``); this repo has no publication
+        layer, so the slimmed ``ServerArgs`` dataclass *is* the resolved config.
+        """
+        if name in _MANAGER_OWNED_FIELDS:
+            return getattr(self, name)
+        if hasattr(self.server_args, name):
+            return getattr(self.server_args, name)
+        from llm_router_utils.sglang.srt.arg_groups.overrides import (
+            resolution_result,
+        )
+
+        return resolution_result(self.server_args, name)
+
     def init_model_config(self) -> None:
-        # Upstream sets self.model_path in init_model_config (from get_model());
-        # here it is simply server_args.model_path. serving_chat.py reads
-        # tokenizer_manager.model_path for the DSV4 reasoning-effort profile.
         self.model_path = self.server_args.model_path
         self.model_config = ModelConfig(
             model_path=self.server_args.model_path,
