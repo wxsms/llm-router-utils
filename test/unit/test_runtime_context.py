@@ -370,6 +370,7 @@ class TestConfigValueResolution(unittest.TestCase):
         keys = _config_value_keys()
         self.assertGreater(len(keys), 0, "no config_value() reads discovered")
         # Force detection to be a no-op so the sentinel survives to config_value.
+        checked = 0
         with patch.object(
             type(self._manager()), "resolve_auto_parsers", return_value=None
         ):
@@ -391,6 +392,15 @@ class TestConfigValueResolution(unittest.TestCase):
                         "auto",
                         f"config_value({name!r}) leaked the unresolved sentinel",
                     )
+                    checked += 1
+        # Without this, a future change that made every field raise would leave
+        # the loop asserting nothing at all and the test would still pass.
+        self.assertGreater(
+            checked,
+            0,
+            "every field hit the ValueError branch; the sentinel-leak "
+            "assertion never ran",
+        )
 
     def test_unresolved_auto_sentinel_raises_instead_of_leaking(self):
         """The backstop: if detection never ran, config_value must not hand a

@@ -47,7 +47,11 @@ def main() -> int:
 
     readme_text = README.read_text(encoding="utf-8")
     row = re.search(
-        rf"^\|\s*`v{re.escape(declared)}`\s*\|\s*\[(v[\d.]+)\]", readme_text, re.MULTILINE
+        # Anchor the version shape: a bare [\d.]+ happily captures malformed
+        # input, so require a real three-part semver for the mapped release.
+        rf"^\|\s*`v{re.escape(declared)}`\s*\|\s*\[(v\d+\.\d+\.\d+)\]",
+        readme_text,
+        re.MULTILINE,
     )
     if not row:
         problems.append(f"README Version Mapping has no row for v{declared}")
