@@ -39,8 +39,11 @@ model A with model B's settings. So there are two levels:
 * :func:`use_runtime_context` binds a **scope** (a ``ContextVar``) that both
   accessors prefer while active.
 
-``OpenAIServingChat`` enters a scope for its own manager, so concurrent
-instances each read their own config.
+A multi-model router must enter :func:`use_runtime_context` around the
+*construction* of each model's serving objects. Nothing does this automatically:
+``OpenAIServingChat`` is kept byte-identical to upstream and never opens a scope
+itself, so without an explicit scope every instance reads whichever manager was
+constructed last.
 """
 
 from __future__ import annotations

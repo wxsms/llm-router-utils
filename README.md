@@ -170,8 +170,13 @@ from llm_router_utils.sglang.srt.runtime_context import use_runtime_context
 
 with use_runtime_context(server_args=a_args, model_config=a_model_config):
     manager = TokenizerManager(a_args, port_args)
-    templates = TemplateManager(manager)
-    serving = OpenAIServingChat(manager, templates)
+    template_manager = TemplateManager()
+    template_manager.initialize_templates(
+        tokenizer_manager=manager,
+        model_path=a_args.model_path,
+        chat_template=a_args.chat_template,
+    )
+    serving = OpenAIServingChat(manager, template_manager)
 ```
 
 Repeat per model, so each instance is built while its own config is in scope.

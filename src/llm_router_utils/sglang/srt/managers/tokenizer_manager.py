@@ -113,15 +113,21 @@ class TokenizerManager:
             self.server_args, name, _DECLARED_ONLY_DEFAULTS.get(name)
         )
         if value == _AUTO_SENTINEL and name in _PARSER_FIELDS:
-            # Returning "auto" here is not a value: ToolCallParserEnum.get()
-            # yields None (tool calls accepted, then silently never parsed) and
-            # ReasoningParser raises "Unsupported model type: auto". Failing
-            # here names the real problem instead.
+            # The sentinel survives only when detection never *completed* — it
+            # raised, or was skipped. When detection runs and simply finds
+            # nothing it declares None, which is a legitimate "no parser"
+            # result and passes through untouched.
+            #
+            # Returning the raw sentinel would be worse than raising:
+            # ToolCallParserEnum.get("auto") is None (tool calls accepted, then
+            # silently never parsed) and ReasoningParser raises a far more
+            # cryptic "Unsupported model type: auto".
             raise ValueError(
-                f"{name}={_AUTO_SENTINEL!r} was never resolved: automatic parser "
-                "detection found no match for this checkpoint. Pass an explicit "
-                f"--{name.replace('_', '-')} or use a checkpoint with a readable "
-                "chat template."
+                f"{name}={_AUTO_SENTINEL!r} was never resolved because automatic "
+                "parser detection did not complete for this checkpoint. Pass an "
+                f"explicit --{name.replace('_', '-')}, or fix the detection "
+                "failure logged earlier (detection needs a readable chat "
+                "template or a reachable model config)."
             )
         return value
 
