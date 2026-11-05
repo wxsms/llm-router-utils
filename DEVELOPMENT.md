@@ -410,11 +410,29 @@ for every `--*-parser auto` field, disabling tool-call parsing and turn grammar.
 `_DECLARED_ONLY_DEFAULTS` covers fields that exist upstream only as a
 declaration (`grammar_backend` → `"xgrammar"`).
 
+**The stash is only useful if something populates it.** Upstream calls
+`resolve_auto_parsers` once from `entrypoints/engine.py` before the tokenizer is
+built; that module does not exist here, so the resolution never ran and every
+`auto` field survived as the literal sentinel. `TokenizerManager` now calls it
+in `__init__`, *before* `init_tokenizer_and_processor` (detection loads its own
+tokenizer), best-effort. As a backstop, `config_value` raises on an unresolved
+sentinel for the parser fields rather than handing a caller `"auto"` — a value
+`ToolCallParserEnum.get()` maps to `None`, which accepts tool calls and then
+silently never parses them.
+
 `runtime_context` keeps two levels: `set_runtime_context(...)` registers the
 process default (last writer wins), and `use_runtime_context(...)` binds a
 `ContextVar` scope that both accessors prefer. Pass `None` explicitly to clear a
-slot — omitting an argument leaves it unchanged. Multi-model routers must wrap
-request handling in `use_runtime_context` for the served model.
+slot — omitting an argument leaves it unchanged.
+
+**Scope construction, not requests.** `hf_chat_template_name`,
+`default_chat_template_kwargs` and the encoding adapter's `revision` are read
+during `TokenizerManager`/`TemplateManager`/`OpenAIServingChat` construction, so
+they are captured into the instance and a request-time scope cannot restore
+them. A multi-model router must build each model's objects inside that model's
+`use_runtime_context` block. `test/unit/test_runtime_context.py` pins both
+halves (`test_construction_scoped_builds_see_their_own_config` and
+`test_request_time_scope_cannot_restore_setup_time_values`).
 
 Because these shims are in the baseline, `check-parity` will report them as
 "baselined" rather than failing. Review them by hand when upstream touches the
@@ -431,6 +449,11 @@ Before tagging, confirm for every upgrade that removes or gates a capability:
 - [ ] Any new platform-gated extra records the Python floor its wheels impose
       (`tml-renderers` is `cp311-abi3`, so the `inkling` extra needs >= 3.11
       even though the base package supports 3.10).
+- [ ] `make check-version` passes: `pyproject.toml`, `_version.py`, the README
+      Version Mapping row and the `.gitmodules` submodule branch all agree.
+- [ ] `platform-extras` CI asserts an exact pass count, not merely "no skips" —
+      `no tests ran`, `N deselected` and `N xfailed` all lack the word
+      "skipped" and would otherwise pass green.
 
 ## Version Table
 

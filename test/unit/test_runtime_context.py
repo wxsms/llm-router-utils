@@ -357,20 +357,67 @@ class TestConfigValueResolution(unittest.TestCase):
     def test_every_config_value_key_resolves_to_a_usable_value(self):
         """Generic guard over the keys the retained tree actually asks for.
 
-        ``None`` is legitimate for the parser fields (it means "no parser");
-        what must never happen is ``"auto"`` leaking through, which is the
-        unresolved sentinel that silently disables parsing.
+        Each field is constructed *with* the ``auto`` sentinel so the assertion
+        can actually fire. The earlier version built ``ServerArgs`` without it,
+        which made ``assertNotEqual(value, "auto")`` vacuously true - a guard
+        that could never fail.
+
+        ``None`` is a legitimate result (it means "no parser"); what must never
+        reach a caller is the unresolved ``"auto"`` sentinel, which makes
+        ``ToolCallParserEnum.get("auto")`` None (tool calls accepted then
+        silently dropped) and ``ReasoningParser`` raise.
         """
         keys = _config_value_keys()
         self.assertGreater(len(keys), 0, "no config_value() reads discovered")
-        manager = self._manager()
-        for name in sorted(keys):
-            with self.subTest(field=name):
-                self.assertNotEqual(
-                    manager.config_value(name),
-                    "auto",
-                    f"config_value({name!r}) returned the unresolved 'auto' sentinel",
+        # Force detection to be a no-op so the sentinel survives to config_value.
+        with patch.object(
+            type(self._manager()), "resolve_auto_parsers", return_value=None
+        ):
+            for name in sorted(keys):
+                with self.subTest(field=name):
+                    if not hasattr(ServerArgs(model_path="m"), name):
+                        # Field exists only as a declaration upstream (e.g.
+                        # grammar_backend); it cannot be passed to ServerArgs.
+                        manager = self._manager()
+                    else:
+                        manager = self._manager(**{name: "auto"})
+                    try:
+                        value = manager.config_value(name)
+                    except ValueError:
+                        # Loud failure is the documented backstop.
+                        continue
+                    self.assertNotEqual(
+                        value,
+                        "auto",
+                        f"config_value({name!r}) leaked the unresolved sentinel",
+                    )
+
+    def test_unresolved_auto_sentinel_raises_instead_of_leaking(self):
+        """The backstop: if detection never ran, config_value must not hand a
+        caller ``"auto"`` to treat as a parser name."""
+        with patch.object(
+            type(self._manager()), "resolve_auto_parsers", return_value=None
+        ):
+            manager = self._manager(tool_call_parser="auto")
+        with self.assertRaises(ValueError):
+            manager.config_value("tool_call_parser")
+
+    def test_manager_calls_resolve_auto_parsers(self):
+        """The resolution must actually run - it had no caller at all before."""
+        import llm_router_utils.sglang.srt.managers.tokenizer_manager as tmm
+
+        with patch.object(tmm.TokenizerManager, "resolve_auto_parsers") as resolver:
+            with patch.object(tmm, "ModelConfig") as model_config_cls:
+                model_config_cls.return_value.image_token_id = None
+                tmm.TokenizerManager(
+                    ServerArgs(
+                        model_path="m",
+                        tool_call_parser="auto",
+                        skip_tokenizer_init=True,
+                    ),
+                    PortArgs(),
                 )
+        resolver.assert_called_once()
 
 
 class TestRuntimeContextScoping(unittest.TestCase):
@@ -407,6 +454,89 @@ class TestRuntimeContextScoping(unittest.TestCase):
             self.assertEqual(get_serving().hf_chat_template_name, "tool_use")
         # restored to the process default afterwards
         self.assertIsNone(get_serving().hf_chat_template_name)
+
+
+class TestMultiModelIsolation(unittest.TestCase):
+    """C1: a multi-model router must not serve A with B's setup-time config.
+
+    ``hf_chat_template_name`` and ``default_chat_template_kwargs`` are read at
+    construction, so only a scope around *construction* isolates them. This test
+    pins both halves of that: construction-scoped works, request-scoped does not.
+    """
+
+    def tearDown(self):
+        reset_runtime_context()
+
+    @staticmethod
+    def _args(model_path, template_name, effort):
+        return ServerArgs(
+            model_path=model_path,
+            hf_chat_template_name=template_name,
+            default_chat_template_kwargs={"reasoning_effort": effort},
+            skip_tokenizer_init=True,
+        )
+
+    def _build(self, args):
+        import llm_router_utils.sglang.srt.managers.tokenizer_manager as tmm
+
+        with patch.object(tmm, "ModelConfig") as model_config_cls:
+            model_config_cls.return_value.image_token_id = None
+            return tmm.TokenizerManager(args, PortArgs())
+
+    def test_construction_scoped_builds_see_their_own_config(self):
+        a = self._args("A", "tool_use", "high")
+        b = self._args("B", None, "low")
+
+        with use_runtime_context(server_args=a, model_config=None):
+            self.assertEqual(get_serving().hf_chat_template_name, "tool_use")
+            self.assertEqual(
+                get_serving().default_chat_template_kwargs, {"reasoning_effort": "high"}
+            )
+            self._build(a)
+
+        with use_runtime_context(server_args=b, model_config=None):
+            self.assertIsNone(get_serving().hf_chat_template_name)
+            self.assertEqual(
+                get_serving().default_chat_template_kwargs, {"reasoning_effort": "low"}
+            )
+            self._build(b)
+
+    def test_last_writer_bleeds_into_the_process_default(self):
+        """Documents the hazard the README warns about."""
+        a = self._args("A", "tool_use", "high")
+        b = self._args("B", None, "low")
+        self._build(a)
+        self._build(b)
+
+        # Process default now reflects B, not A.
+        self.assertIsNone(get_serving().hf_chat_template_name)
+        self.assertEqual(
+            get_serving().default_chat_template_kwargs, {"reasoning_effort": "low"}
+        )
+        # ...while A's own ServerArgs still carries the operator's intent, which
+        # is why a caller can recover by reading the instance, not the global.
+        self.assertEqual(a.hf_chat_template_name, "tool_use")
+        self.assertEqual(a.default_chat_template_kwargs, {"reasoning_effort": "high"})
+
+    def test_request_time_scope_cannot_restore_setup_time_values(self):
+        """The trap the docs previously described wrongly.
+
+        A value captured at construction is already baked into the instance, so
+        entering a scope later changes what *new* reads see, not what was stored.
+        """
+        a = self._args("A", "tool_use", "high")
+        b = self._args("B", None, "low")
+        self._build(a)
+        self._build(b)
+
+        captured_at_setup = get_serving().default_chat_template_kwargs
+        self.assertEqual(captured_at_setup, {"reasoning_effort": "low"})
+
+        with use_runtime_context(server_args=a):
+            # New reads do reflect the scope...
+            self.assertEqual(get_serving().hf_chat_template_name, "tool_use")
+            # ...but anything already captured is unchanged.
+            self.assertEqual(captured_at_setup, {"reasoning_effort": "low"})
 
 
 if __name__ == "__main__":

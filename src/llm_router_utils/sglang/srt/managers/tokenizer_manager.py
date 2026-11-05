@@ -40,6 +40,12 @@ _MANAGER_OWNED_FIELDS = ("model_path", "served_model_name")
 #: ``serving_chat._template_turn_grammar()`` is permanently off.
 _DECLARED_ONLY_DEFAULTS = {"grammar_backend": "xgrammar"}
 
+#: The sentinel an operator passes to request auto-detection.
+_AUTO_SENTINEL = "auto"
+
+#: Fields where the sentinel is a request for detection, never a usable value.
+_PARSER_FIELDS = ("reasoning_parser", "tool_call_parser")
+
 
 class TokenizerManager:
     """Minimal TokenizerManager that loads a tokenizer + model config.
@@ -57,8 +63,32 @@ class TokenizerManager:
         self.processor: Any = None
 
         self.init_model_config()
+        self.resolve_auto_parsers()
         if not server_args.skip_tokenizer_init:
             self.init_tokenizer_and_processor()
+
+    def resolve_auto_parsers(self) -> None:
+        """Resolve ``--*-parser auto`` into concrete parser names.
+
+        Upstream does this once in ``entrypoints.engine`` before the tokenizer
+        is built; that module does not exist here, so the resolution never
+        happened and every ``auto`` field stayed the literal sentinel. A
+        downstream ``ToolCallParserEnum.get("auto")`` is ``None``, which
+        silently accepts tool calls and then never parses them.
+
+        Runs before ``init_tokenizer_and_processor`` because detection loads a
+        tokenizer of its own, and is best-effort: detection needs a reachable
+        checkpoint, and a manager built from an unreachable path must still
+        construct (the sentinel is then reported loudly by ``config_value``).
+        """
+        from llm_router_utils.sglang.srt.parser.template_detection import (
+            resolve_auto_parsers,
+        )
+
+        try:
+            resolve_auto_parsers(self.server_args)
+        except Exception as exc:  # noqa: BLE001 - detection is best-effort
+            logger.warning("Failed to resolve auto parsers: %s", exc)
 
     def config_value(self, name: str):
         """The value in effect for one config field.
@@ -79,9 +109,21 @@ class TokenizerManager:
             resolution_result,
         )
 
-        return resolution_result(
+        value = resolution_result(
             self.server_args, name, _DECLARED_ONLY_DEFAULTS.get(name)
         )
+        if value == _AUTO_SENTINEL and name in _PARSER_FIELDS:
+            # Returning "auto" here is not a value: ToolCallParserEnum.get()
+            # yields None (tool calls accepted, then silently never parsed) and
+            # ReasoningParser raises "Unsupported model type: auto". Failing
+            # here names the real problem instead.
+            raise ValueError(
+                f"{name}={_AUTO_SENTINEL!r} was never resolved: automatic parser "
+                "detection found no match for this checkpoint. Pass an explicit "
+                f"--{name.replace('_', '-')} or use a checkpoint with a readable "
+                "chat template."
+            )
+        return value
 
     def init_model_config(self) -> None:
         self.model_path = self.server_args.model_path

@@ -55,16 +55,22 @@ jobs:
           python -c "import deepseek_recipe; print('deepseek-recipe import ok')"
           python -c "import tml_renderers; print('tml-renderers import ok')"
 
+      # A bare "no skips" assertion is not enough: "no tests ran", "8 deselected"
+      # and "5 passed, 2 xfailed" all contain no "skipped" and would pass green.
+      # Assert the exact pass count so a renamed or emptied test file fails here.
       - name: DeepSeek-V4.1 tests must run, not skip
         run: |
-          # pipefail: without it `... | tee` reports tee's (always 0) exit status
-          # and a failing test would not fail the job.
           set -o pipefail
           PYTHONPATH=src python -m pytest \
             test/unit/function_call/test_deepseekv41_detector.py \
             -q -rs --no-header | tee /tmp/dsv41.txt
-          if grep -qE '[0-9]+ skipped' /tmp/dsv41.txt; then
-            echo "::error::deepseekv41 tests skipped - deepseek-recipe not usable"
+          if grep -qE '[0-9]+ (skipped|deselected|xfailed|error)' /tmp/dsv41.txt; then
+            echo "::error::deepseekv41 tests did not all run - deepseek-recipe not usable"
+            exit 1
+          fi
+          if ! grep -qE '^8 passed' /tmp/dsv41.txt; then
+            echo "::error::expected exactly 8 passed in the deepseekv41 suite"
+            cat /tmp/dsv41.txt
             exit 1
           fi
 
@@ -73,8 +79,13 @@ jobs:
           set -o pipefail
           PYTHONPATH=src python -m pytest test/unit/parser/test_inkling_renderer.py \
             -q -rs --no-header | tee /tmp/inkling.txt
-          if grep -qE '[0-9]+ skipped' /tmp/inkling.txt; then
-            echo "::error::inkling tests skipped - tml-renderers not usable"
+          if grep -qE '[0-9]+ (skipped|deselected|xfailed|error)' /tmp/inkling.txt; then
+            echo "::error::inkling tests did not all run - tml-renderers not usable"
+            exit 1
+          fi
+          if ! grep -qE '^14 passed' /tmp/inkling.txt; then
+            echo "::error::expected exactly 14 passed in the inkling suite"
+            cat /tmp/inkling.txt
             exit 1
           fi
 
@@ -100,6 +111,9 @@ jobs:
 
       - name: No direct torch import in src/
         run: make check-torch
+
+      - name: Release version consistency
+        run: make check-version
 
       - name: Parity check (no NEW drift vs upstream)
         run: make check-parity

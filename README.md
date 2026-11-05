@@ -150,20 +150,36 @@ no longer exist on any platform.
 
 ### Serving several models from one process
 
-Each `TokenizerManager` registers its config as a process-level default, so the
-last one constructed wins. A router that serves multiple models through this
-package should scope request handling to the model being served:
+Each `TokenizerManager` registers its config as a **process-level default**, so
+the one constructed last wins. Single-model services are unaffected. A router
+that builds more than one manager must scope the *construction* of each model's
+serving objects, because several settings are read once at setup time rather
+than per request:
+
+| Read at setup (construction) | Read per request |
+|---|---|
+| `hf_chat_template_name` (template initialisation) | `return_input_ids` / `return_output_ids` |
+| `default_chat_template_kwargs` (`__init__`) | `enable_cache_report` |
+| the encoding adapter's `revision` (`__init__`) | `incremental_streaming_output` |
+
+Wrapping only the request therefore **does not** restore the setup-time values —
+they were already captured. Wrap construction:
 
 ```python
 from llm_router_utils.sglang.srt.runtime_context import use_runtime_context
 
-with use_runtime_context(server_args=model_a.server_args,
-                         model_config=model_a.model_config):
-    ...  # get_serving() / get_model() read model A's config here
+with use_runtime_context(server_args=a_args, model_config=a_model_config):
+    manager = TokenizerManager(a_args, port_args)
+    templates = TemplateManager(manager)
+    serving = OpenAIServingChat(manager, templates)
 ```
 
-Without that, `get_serving()`/`get_model()` reflect whichever manager was built
-last (for example a model's configured `hf_chat_template_name` would be ignored).
+Repeat per model, so each instance is built while its own config is in scope.
+
+> **Do not** wrap only request handling. After model B is built, model A's
+> already-constructed objects no longer see their own `hf_chat_template_name` or
+> `default_chat_template_kwargs`; a request-scoped `use_runtime_context` leaves
+> A serving with B's setup-time values.
 
 
 

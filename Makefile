@@ -1,4 +1,4 @@
-.PHONY: help install test test-unit test-integration build clean lint check-torch check-parity update-parity-baseline check-license
+.PHONY: help install test test-unit test-integration build clean lint check-torch check-version check-parity update-parity-baseline check-license
 
 help:
 	@echo "llm-router-utils — common commands"
@@ -33,6 +33,10 @@ build:
 check-torch:
 	@echo "Checking for direct torch imports in src/..."
 	@python scripts/check_torch_imports.py
+
+check-version:
+	@echo "Checking release version consistency..."
+	@python scripts/check_version.py
 
 check-parity:
 	@echo "Checking retained src/ parity against vendor/sglang upstream..."
