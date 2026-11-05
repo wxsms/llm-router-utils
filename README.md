@@ -152,22 +152,21 @@ no longer exist on any platform.
 
 Each `TokenizerManager` registers its config as a **process-level default**, so
 the one constructed last wins. Single-model services are unaffected. A router
-that builds more than one manager must scope the *construction* of each model's
-serving objects, because several settings are read once at setup time rather
-than per request:
+that builds more than one manager must scope **both** construction and request
+handling, because the two groups read the global at different times:
 
-| Read at setup (construction) | Read per request |
+| Read at setup (construction) — scope the build | Read per request — scope the call |
 |---|---|
-| `hf_chat_template_name` (template initialisation) | `return_input_ids` / `return_output_ids` |
-| `default_chat_template_kwargs` (`__init__`) | `enable_cache_report` |
-| the encoding adapter's `revision` (`__init__`) | `incremental_streaming_output` |
+| `hf_chat_template_name` (template initialisation) | `enable_cache_report` |
+| `default_chat_template_kwargs` (`__init__`) | `incremental_streaming_output` |
+| the encoding adapter's `revision` (`__init__`) | `return_input_ids` / `return_output_ids` |
 
-Wrapping only the request therefore **does not** restore the setup-time values —
-they were already captured. Wrap construction:
+Scope construction, then scope each request:
 
 ```python
 from llm_router_utils.sglang.srt.runtime_context import use_runtime_context
 
+# 1. Build each model's objects inside that model's scope.
 with use_runtime_context(server_args=a_args, model_config=a_model_config):
     manager = TokenizerManager(a_args, port_args)
     template_manager = TemplateManager()
@@ -177,6 +176,11 @@ with use_runtime_context(server_args=a_args, model_config=a_model_config):
         chat_template=a_args.chat_template,
     )
     serving = OpenAIServingChat(manager, template_manager)
+
+# 2. Serve each request inside the same scope, because the per-request
+#    fields above are read from the global on every call.
+with use_runtime_context(server_args=a_args, model_config=a_model_config):
+    result = serving._process_messages(request, is_multimodal=False)
 ```
 
 Repeat per model, so each instance is built while its own config is in scope.

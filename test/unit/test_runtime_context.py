@@ -413,21 +413,52 @@ class TestConfigValueResolution(unittest.TestCase):
             manager.config_value("tool_call_parser")
 
     def test_manager_calls_resolve_auto_parsers(self):
-        """The resolution must actually run - it had no caller at all before."""
+        """The resolution must actually run when detection is requested."""
         import llm_router_utils.sglang.srt.managers.tokenizer_manager as tmm
 
         with patch.object(tmm.TokenizerManager, "resolve_auto_parsers") as resolver:
             with patch.object(tmm, "ModelConfig") as model_config_cls:
                 model_config_cls.return_value.image_token_id = None
                 tmm.TokenizerManager(
-                    ServerArgs(
-                        model_path="m",
-                        tool_call_parser="auto",
-                        skip_tokenizer_init=True,
-                    ),
+                    ServerArgs(model_path="m", tool_call_parser="auto"),
                     PortArgs(),
                 )
         resolver.assert_called_once()
+
+    def test_skipped_when_no_parser_is_auto(self):
+        """No ``auto`` means nothing to detect, so no detection cost."""
+        import llm_router_utils.sglang.srt.managers.tokenizer_manager as tmm
+
+        with patch.object(tmm.TokenizerManager, "resolve_auto_parsers") as resolver:
+            with patch.object(tmm, "ModelConfig") as model_config_cls:
+                model_config_cls.return_value.image_token_id = None
+                tmm.TokenizerManager(
+                    ServerArgs(model_path="m", tool_call_parser="hermes"), PortArgs()
+                )
+        resolver.assert_not_called()
+
+    def test_skip_tokenizer_init_is_not_bypassed_by_detection(self):
+        """``skip_tokenizer_init`` promises no tokenizer load.
+
+        Detection performs one of its own, so it must not run when that flag is
+        set - otherwise the contract is silently violated for every ``auto``
+        user.
+        """
+        import llm_router_utils.sglang.srt.managers.tokenizer_manager as tmm
+
+        with patch.object(tmm.TokenizerManager, "resolve_auto_parsers") as resolver:
+            with patch.object(tmm.TokenizerManager, "init_tokenizer_and_processor"):
+                with patch.object(tmm, "ModelConfig") as model_config_cls:
+                    model_config_cls.return_value.image_token_id = None
+                    tmm.TokenizerManager(
+                        ServerArgs(
+                            model_path="m",
+                            tool_call_parser="auto",
+                            skip_tokenizer_init=True,
+                        ),
+                        PortArgs(),
+                    )
+        resolver.assert_not_called()
 
 
 class TestRuntimeContextScoping(unittest.TestCase):
@@ -547,6 +578,68 @@ class TestMultiModelIsolation(unittest.TestCase):
             self.assertEqual(get_serving().hf_chat_template_name, "tool_use")
             # ...but anything already captured is unchanged.
             self.assertEqual(captured_at_setup, {"reasoning_effort": "low"})
+
+
+class TestServingConfigDefaultsCoverServerArgs(unittest.TestCase):
+    """Structural guard for the shim-fidelity defect class.
+
+    ``_ServingConfig`` falls back to ``_DEFAULTS`` for any name absent from the
+    bound ``ServerArgs``. A key that exists only in ``_DEFAULTS`` is therefore
+    frozen at its default forever and the operator's setting is silently
+    ignored -- which is exactly what happened to ``return_input_ids``,
+    ``return_output_ids`` and ``trust_request_chat_template``.
+
+    The per-attribute test above cannot catch that: ``_DEFAULTS`` always
+    resolves, so the read never fails. This asserts the two sets are aligned.
+    """
+
+    def test_every_serving_default_is_a_real_server_args_field(self):
+        import dataclasses
+
+        from llm_router_utils.sglang.srt.runtime_context import _ServingConfig
+        from llm_router_utils.sglang.srt.server_args import ServerArgs
+
+        field_names = {f.name for f in dataclasses.fields(ServerArgs)}
+        orphans = sorted(set(_ServingConfig._DEFAULTS) - field_names)
+        self.assertEqual(
+            orphans,
+            [],
+            "these _ServingConfig defaults have no ServerArgs field, so an "
+            "operator's value can never take effect: "
+            f"{orphans}. Add the field to ServerArgs (see upstream "
+            "arg_groups/fields/serving.py).",
+        )
+
+    def test_operator_values_survive_the_defaults_table(self):
+        """A field that *does* exist must carry the operator's value through."""
+        import dataclasses
+
+        from llm_router_utils.sglang.srt.runtime_context import (
+            _ServingConfig,
+            get_serving,
+            reset_runtime_context,
+            set_runtime_context,
+        )
+
+        bool_fields = [
+            f.name
+            for f in dataclasses.fields(ServerArgs)
+            if f.name in _ServingConfig._DEFAULTS
+            and isinstance(f.default, bool)
+            and f.default is False
+        ]
+        self.assertGreater(len(bool_fields), 0, "no inspectable bool defaults found")
+
+        for name in bool_fields:
+            with self.subTest(field=name):
+                set_runtime_context(server_args=ServerArgs(model_path="m", **{name: True}))
+                try:
+                    self.assertTrue(
+                        getattr(get_serving(), name),
+                        f"{name}=True was overridden by _ServingConfig._DEFAULTS",
+                    )
+                finally:
+                    reset_runtime_context()
 
 
 if __name__ == "__main__":

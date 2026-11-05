@@ -47,6 +47,13 @@ _AUTO_SENTINEL = "auto"
 _PARSER_FIELDS = ("reasoning_parser", "tool_call_parser")
 
 
+def _wants_auto_parsers(server_args: Any) -> bool:
+    """Whether the operator asked for automatic parser detection."""
+    return any(
+        getattr(server_args, name, None) == _AUTO_SENTINEL for name in _PARSER_FIELDS
+    )
+
+
 class TokenizerManager:
     """Minimal TokenizerManager that loads a tokenizer + model config.
 
@@ -63,7 +70,14 @@ class TokenizerManager:
         self.processor: Any = None
 
         self.init_model_config()
-        self.resolve_auto_parsers()
+        # Only worth doing when the operator actually asked for detection, and
+        # never when they opted out of tokenizer loading: detection loads its
+        # own tokenizer, so running it under skip_tokenizer_init would defeat
+        # the flag (measured: it did).
+        if not server_args.skip_tokenizer_init and _wants_auto_parsers(
+            server_args
+        ):
+            self.resolve_auto_parsers()
         if not server_args.skip_tokenizer_init:
             self.init_tokenizer_and_processor()
 
@@ -153,10 +167,14 @@ class TokenizerManager:
         # get_model()/get_serving() reads. Register it so those accessors do
         # not fail closed for the dsv4/dsv41/inkling encoding adapters.
         #
-        # NOTE: this is a process-level default. With several managers in one
-        # process it is last-writer-wins, so a multi-model router that needs
-        # per-instance isolation must wrap request handling in
-        # ``use_runtime_context(...)``. See runtime_context's module docstring.
+        # NOTE: this is a process-level default, last-writer-wins. A multi-model
+        # router must open ``use_runtime_context(...)`` twice: once around each
+        # model's *construction* (hf_chat_template_name, default_chat_template_kwargs
+        # and the adapter's revision are captured there) and once around each
+        # *request* (enable_cache_report, incremental_streaming_output,
+        # return_input_ids/return_output_ids and the rest are re-read from the
+        # global on every call). See runtime_context's module docstring and the
+        # README "Serving several models from one process" section.
         set_runtime_context(
             server_args=self.server_args, model_config=self.model_config
         )

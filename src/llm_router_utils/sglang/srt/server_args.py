@@ -50,6 +50,13 @@ class ServerArgs:
     incremental_streaming_output: bool = False
     stream_response_default_include_usage: bool = False
     allow_auto_truncate: bool = False
+    # Upstream declares these three in arg_groups/fields/serving.py. They must
+    # exist here too: runtime_context._ServingConfig falls back to its built-in
+    # defaults for any field missing from ServerArgs, which would freeze them at
+    # False and silently ignore an operator's setting.
+    trust_request_chat_template: bool = False
+    return_input_ids: bool = False
+    return_output_ids: bool = False
     skip_tokenizer_init: bool = False
     trust_remote_code: bool = False
     tokenizer_mode: str = "auto"

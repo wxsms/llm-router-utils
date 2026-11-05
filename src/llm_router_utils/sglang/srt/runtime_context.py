@@ -88,10 +88,22 @@ def reset_runtime_context() -> None:
 
 @contextmanager
 def use_runtime_context(
-    *, server_args: Any = None, model_config: Any = None
+    *, server_args: Any = _UNSET, model_config: Any = _UNSET
 ) -> Iterator[None]:
-    """Bind config for the duration of the block, restoring on exit."""
-    token = _SCOPED.set((server_args, model_config))
+    """Bind config for the duration of the block, restoring on exit.
+
+    An omitted argument inherits the process default rather than clearing it,
+    matching :func:`set_runtime_context`. Pass ``None`` explicitly to blank a
+    slot for the block. (Previously both defaulted to ``None``, so scoping only
+    ``server_args`` silently hid ``model_config`` and ``get_model()`` started
+    failing closed.)
+    """
+    current = _SCOPED.get()
+    inherited_args = current[0] if current is not None else _SERVER_ARGS
+    inherited_model = current[1] if current is not None else _MODEL_CONFIG
+    bound_args = inherited_args if server_args is _UNSET else server_args
+    bound_model = inherited_model if model_config is _UNSET else model_config
+    token = _SCOPED.set((bound_args, bound_model))
     try:
         yield
     finally:
