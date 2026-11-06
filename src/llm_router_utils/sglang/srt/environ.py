@@ -2338,9 +2338,9 @@ def redirect_third_party_caches():
 
 _handle_deprecated_envs()
 
-# Trigger auto-injection of CUDA coredump env vars when SGLANG_CUDA_COREDUMP=1.
-# Best-effort; for strict guarantees, set CUDA_* env vars in the shell before
-# launching Python. Imported conditionally to keep the default import of this
-# module free of non-stdlib side effects.
-if envs.SGLANG_CUDA_COREDUMP.get():
-    import llm_router_utils.sglang.srt.debug_utils.cuda_coredump  # noqa: F401, E402  # isort: skip
+# Upstream imports ``srt.debug_utils.cuda_coredump`` here when
+# SGLANG_CUDA_COREDUMP=1, to auto-inject the CUDA_* dump env vars. That module
+# is part of the CUDA runtime and is not retained in this repo, so the
+# conditional import is dropped (see CLAUDE.md and DEVELOPMENT.md rule on
+# cuda_coredump). The env vars below remain readable but have no side effect.
+

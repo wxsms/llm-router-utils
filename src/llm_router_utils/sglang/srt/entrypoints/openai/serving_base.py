@@ -67,25 +67,44 @@ class OpenAIServingBase:
 
     # -- model / LoRA ------------------------------------------------------
     def _parse_model_parameter(self, model: str) -> Tuple[str, Optional[str]]:
-        """Split ``base:adapter`` into a base model and an optional LoRA path."""
-        if getattr(self.tokenizer_manager.server_args, "enable_lora", False):
-            # Keep backward-compatibility where it was using the delimiter ":".
-            if ":" in model:
-                base, lora = model.split(":", 1)
-                if lora:
-                    return base, lora
+        """Parse 'base-model:adapter-name' syntax to extract LoRA adapter.
+
+        Returns (base_model, adapter_name), preserving an exact served model
+        name even when it contains colons (e.g. an object-storage URI).
+        """
+        if ":" not in model:
             return model, None
-        return model, None
+
+        served_model_name = self.tokenizer_manager.served_model_name
+        if model == served_model_name:
+            return model, None
+
+        # Match the full served name before splitting URI schemes like s3://.
+        if model.startswith(f"{served_model_name}:"):
+            base_model = served_model_name
+            adapter_name = model[len(served_model_name) + 1 :]
+        else:
+            base_model, adapter_name = model.split(":", 1)
+
+        return base_model.strip(), adapter_name.strip() or None
 
     def _resolve_lora_path(
-        self, lora_path: Optional[str], model: Optional[str]
-    ) -> Optional[str]:
-        """Resolve the LoRA adapter path for a request."""
-        if model:
-            _, lora_path_from_model = self._parse_model_parameter(model)
-            if lora_path_from_model:
-                return lora_path_from_model
-        return lora_path
+        self,
+        request_model: str,
+        explicit_lora_path: Optional[Union[str, List[Optional[str]]]],
+    ) -> Optional[Union[str, List[Optional[str]]]]:
+        """Resolve LoRA adapter with priority: model parameter > explicit lora_path.
+
+        Returns adapter name or None. Supports both single values and lists (batches).
+        """
+        _, adapter_from_model = self._parse_model_parameter(request_model)
+
+        # Model parameter adapter takes precedence
+        if adapter_from_model is not None:
+            return adapter_from_model
+
+        # Fall back to explicit lora_path
+        return explicit_lora_path
 
     # -- error responses ---------------------------------------------------
     def create_error_response(

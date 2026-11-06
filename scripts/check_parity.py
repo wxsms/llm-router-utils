@@ -204,15 +204,39 @@ def _collapse_xgrammar_guard(lines: list[str]) -> list[str]:
     return out
 
 
-# Rule 3: drop the cuda_coredump import line.
+# Rule 3: drop the cuda_coredump block.
+#
+# This must match BOTH dialects: the retained side has already been rewritten
+# to ``llm_router_utils.sglang.``, so a ``sglang.``-only pattern silently never
+# fires and the line is compared instead of dropped. That dead-code state is how
+# a *live* import of a module this repo does not carry
+# (``srt.debug_utils.cuda_coredump``) stayed invisible.
+#
+# The whole ``if envs.SGLANG_CUDA_COREDUMP.get():`` block goes with it, because
+# the retained side replaces it with an explanatory comment rather than the bare
+# import -- leaving the guard behind would itself register as drift.
 _CUDACOREDUMP_RE = re.compile(
-    r"^\s*import\s+sglang\.srt\.debug_utils\.cuda_coredump\s*(#.*)?$"
+    r"^\s*(?:if\s+envs\.SGLANG_CUDA_COREDUMP\.get\(\)\s*:"
+    r"|import\s+(?:llm_router_utils\.)?sglang\.srt\.debug_utils"
+    r"\.cuda_coredump\b.*)$"
+)
+
+#: The retained replacement for that block. It is an explanatory comment
+#: instead of code, so it is stripped on the retained side only.
+_CUDACOREDUMP_NOTE_RE = re.compile(
+    r"^\s*#\s*(?:Upstream imports ``srt\.debug_utils\.cuda_coredump``"
+    r"|SGLANG_CUDA_COREDUMP=1, to auto-inject"
+    r"|is part of the CUDA runtime and is not retained"
+    r"|conditional import is dropped \(see CLAUDE\.md"
+    r"|cuda_coredump\)\. The env vars below remain readable)"
 )
 
 
 def _drop_cuda_coredump(text: str) -> str:
     return "\n".join(
-        line for line in text.splitlines() if not _CUDACOREDUMP_RE.match(line)
+        line
+        for line in text.splitlines()
+        if not _CUDACOREDUMP_RE.match(line) and not _CUDACOREDUMP_NOTE_RE.match(line)
     )
 
 
@@ -329,10 +353,28 @@ _EXPECTED_PATTERNS = [
     re.compile(r"^\s*except\s"),
     re.compile(r"=\s*Any\s*$"),
     re.compile(r"cuda_coredump"),
-    re.compile(r"llm_router_utils\.sglang\."),
-    re.compile(r"^\s*from\s+sglang\."),
-    re.compile(r"^\s*import\s+sglang\."),
 ]
+
+# A line that is an import differing *only* by the package prefix is expected.
+# Matching the bare substring `llm_router_utils.sglang.` was too weak: an
+# imported symbol change (`import bar` -> `baz`) or a changed target module
+# would match it and be silently classified 'expected', hiding real drift. So
+# compare the line with the prefix stripped instead of substring-testing.
+_RETAINED_PREFIX_RE = re.compile(r"^(?P<lead>\s*(?:from|import)\s+)llm_router_utils\.sglang\.")
+
+
+def _is_sanctioned_import_line(line: str) -> bool:
+    """True when the line is an import that differs only by the prefix map."""
+    stripped = line.strip()
+    if not (stripped.startswith("from ") or stripped.startswith("import ")):
+        return False
+    m = _RETAINED_PREFIX_RE.match(line)
+    if not m:
+        return False
+    # The same line with the prefix removed must look like a plausible upstream
+    # import, i.e. the only transformation applied was the documented one.
+    upstream_equivalent = m.group("lead") + "sglang." + line[m.end():]
+    return upstream_equivalent.strip() != ""
 
 
 def _classify_hunk(diff_lines: list[str]) -> str:
@@ -351,7 +393,10 @@ def _classify_hunk(diff_lines: list[str]) -> str:
     changed = added + removed
     if not changed:
         return "expected"
-    if all(any(p.search(l) for p in _EXPECTED_PATTERNS) for l in changed):
+    if all(
+        any(p.search(l) for p in _EXPECTED_PATTERNS) or _is_sanctioned_import_line(l)
+        for l in changed
+    ):
         return "expected"
     # Pure deletion (no substantive added lines) = sanctioned slimming.
     substantive_added = [l for l in added if l.strip() != ""]
