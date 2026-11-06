@@ -32,6 +32,9 @@ import jinja2.ext
 import jinja2.nodes
 import jinja2.sandbox
 
+from llm_router_utils.sglang.srt.arg_groups.muse_spark_hook import muse_spark_chat_template_default
+from llm_router_utils.sglang.srt.arg_groups.overrides import declare_resolution, resolving_view
+
 logger = logging.getLogger(__name__)
 
 
@@ -163,22 +166,25 @@ REASONING_MODE_RULES = (
     DetectionRule(
         name="force_reasoning_pattern",
         value=ReasoningToggleConfig(special_case="always"),
-        predicate=lambda ctx: ctx.has_pattern(r"<\|im_start\|>assistant\\n<think>\\n")
-        and not ctx.has_text("enable_thinking")
-        and not ctx.has_text("thinking"),
+        predicate=lambda ctx: (
+            ctx.has_pattern(r"<\|im_start\|>assistant\\n<think>\\n")
+            and not ctx.has_text("enable_thinking")
+            and not ctx.has_text("thinking")
+        ),
     ),
     DetectionRule(
         name="glm53_always_think",
         value=ReasoningToggleConfig(special_case="always"),
-        # GLM-5.3's generation prompt opens the think tag, so the output carries no
+        # GLM-5.3's generation prompt opens <think>, so the output carries no
         # opening tag; lambda because _is_glm53 is defined below.
         predicate=lambda ctx: _is_glm53(ctx),
     ),
     DetectionRule(
         name="mistral_reasoning_effort",
         value=ReasoningToggleConfig(special_case="mistral"),
-        predicate=lambda ctx: ctx.has_text("reasoning_effort")
-        and ctx.has_text("[THINK]"),
+        predicate=lambda ctx: (
+            ctx.has_text("reasoning_effort") and ctx.has_text("[THINK]")
+        ),
     ),
     DetectionRule(
         name="hunyuan_reasoning_effort",
@@ -194,12 +200,14 @@ REASONING_MODE_RULES = (
         value=ReasoningToggleConfig(
             toggle_param="enable_thinking", default_enabled=False
         ),
-        predicate=lambda ctx: ctx.has_pattern(
-            r"{%\s*if\s+not\s+enable_thinking\s+is\s+defined\s*%}.*?"
-            r"{%\s*set\s+enable_thinking\s*=\s*(?:false|False)\s*%}",
-            re.DOTALL,
-        )
-        or _has_toggle_default_assignment(ctx, "enable_thinking", False),
+        predicate=lambda ctx: (
+            ctx.has_pattern(
+                r"{%\s*if\s+not\s+enable_thinking\s+is\s+defined\s*%}.*?"
+                r"{%\s*set\s+enable_thinking\s*=\s*(?:false|False)\s*%}",
+                re.DOTALL,
+            )
+            or _has_toggle_default_assignment(ctx, "enable_thinking", False)
+        ),
     ),
     DetectionRule(
         name="nemotron_3_super_low_effort",
@@ -208,58 +216,65 @@ REASONING_MODE_RULES = (
             default_enabled=True,
             effort_kwarg="low_effort",
         ),
-        predicate=lambda ctx: ctx.has_text("low_effort")
-        and ctx.has_text("truncate_history_thinking"),
+        predicate=lambda ctx: (
+            ctx.has_text("low_effort") and ctx.has_text("truncate_history_thinking")
+        ),
     ),
     DetectionRule(
         name="enable_thinking_default_true",
         value=ReasoningToggleConfig(
             toggle_param="enable_thinking", default_enabled=True
         ),
-        predicate=lambda ctx: ctx.has_pattern(
-            r"{%\s*if\s+not\s+enable_thinking\s+is\s+defined\s*%}.*?"
-            r"{%\s*set\s+enable_thinking\s*=\s*(?:true|True)\s*%}",
-            re.DOTALL,
-        )
-        or ctx.has_pattern(
-            r"set\s+enable_thinking\s*=\s*enable_thinking\s+if\s+enable_thinking\s+is\s+defined\s+else\s+(?:true|True)"
-        )
-        or ctx.has_pattern(
-            r"enable_thinking\s+is\s+defined\s+and\s+(?:enable_thinking\s+is\s+false|not\s+enable_thinking)"
-        )
-        or ctx.has_pattern(
-            r"enable_thinking\s+is\s+not\s+defined\s+or\s+enable_thinking"
-        )
-        or ctx.has_pattern(r"namespace\([^)]*enable_thinking\s*=\s*true")
-        or _has_toggle_default_assignment(ctx, "enable_thinking", True),
+        predicate=lambda ctx: (
+            ctx.has_pattern(
+                r"{%\s*if\s+not\s+enable_thinking\s+is\s+defined\s*%}.*?"
+                r"{%\s*set\s+enable_thinking\s*=\s*(?:true|True)\s*%}",
+                re.DOTALL,
+            )
+            or ctx.has_pattern(
+                r"set\s+enable_thinking\s*=\s*enable_thinking\s+if\s+enable_thinking\s+is\s+defined\s+else\s+(?:true|True)"
+            )
+            or ctx.has_pattern(
+                r"enable_thinking\s+is\s+defined\s+and\s+(?:enable_thinking\s+is\s+false|not\s+enable_thinking)"
+            )
+            or ctx.has_pattern(
+                r"enable_thinking\s+is\s+not\s+defined\s+or\s+enable_thinking"
+            )
+            or ctx.has_pattern(r"namespace\([^)]*enable_thinking\s*=\s*true")
+            or _has_toggle_default_assignment(ctx, "enable_thinking", True)
+        ),
     ),
     DetectionRule(
         name="explicit_thinking_default_false",
         value=ReasoningToggleConfig(toggle_param="thinking", default_enabled=False),
-        predicate=lambda ctx: ctx.has_pattern(
-            r"{%\s*if\s+not\s+thinking\s+is\s+defined\s*%}.*?"
-            r"{%\s*set\s+thinking\s*=\s*(?:false|False)\s*%}",
-            re.DOTALL,
-        )
-        or _has_toggle_default_assignment(ctx, "thinking", False),
+        predicate=lambda ctx: (
+            ctx.has_pattern(
+                r"{%\s*if\s+not\s+thinking\s+is\s+defined\s*%}.*?"
+                r"{%\s*set\s+thinking\s*=\s*(?:false|False)\s*%}",
+                re.DOTALL,
+            )
+            or _has_toggle_default_assignment(ctx, "thinking", False)
+        ),
     ),
     DetectionRule(
         name="thinking_default_true",
         value=ReasoningToggleConfig(toggle_param="thinking", default_enabled=True),
-        predicate=lambda ctx: ctx.has_pattern(
-            r"{%\s*if\s+not\s+thinking\s+is\s+defined\s*%}.*?"
-            r"{%\s*set\s+thinking\s*=\s*(?:true|True)\s*%}",
-            re.DOTALL,
-        )
-        or ctx.has_pattern(
-            r"set\s+thinking\s*=\s*thinking\s+if\s+thinking\s+is\s+defined\s+else\s+(?:true|True)"
-        )
-        or ctx.has_pattern(
-            r"thinking\s+is\s+defined\s+and\s+(?:thinking\s+is\s+false|not\s+thinking)"
-        )
-        or ctx.has_pattern(r"thinking\s+is\s+not\s+defined\s+or\s+thinking")
-        or ctx.has_pattern(r"namespace\([^)]*thinking\s*=\s*true")
-        or _has_toggle_default_assignment(ctx, "thinking", True),
+        predicate=lambda ctx: (
+            ctx.has_pattern(
+                r"{%\s*if\s+not\s+thinking\s+is\s+defined\s*%}.*?"
+                r"{%\s*set\s+thinking\s*=\s*(?:true|True)\s*%}",
+                re.DOTALL,
+            )
+            or ctx.has_pattern(
+                r"set\s+thinking\s*=\s*thinking\s+if\s+thinking\s+is\s+defined\s+else\s+(?:true|True)"
+            )
+            or ctx.has_pattern(
+                r"thinking\s+is\s+defined\s+and\s+(?:thinking\s+is\s+false|not\s+thinking)"
+            )
+            or ctx.has_pattern(r"thinking\s+is\s+not\s+defined\s+or\s+thinking")
+            or ctx.has_pattern(r"namespace\([^)]*thinking\s*=\s*true")
+            or _has_toggle_default_assignment(ctx, "thinking", True)
+        ),
     ),
 )
 
@@ -292,6 +307,10 @@ def _is_mistral(ctx):
         ctx.reasoning_config is not None
         and ctx.reasoning_config.special_case == "mistral"
     )
+
+
+def _is_beam(ctx):
+    return ctx.has_text("<|channel|>") and ctx.has_text("<rfl:parameter")
 
 
 def _is_gpt_oss(ctx):
@@ -348,12 +367,12 @@ def _is_glm53(ctx):
     # GLM-5.3 keeps the GLM-4.5 prompt and tool-call format but replaces the
     # enable_thinking toggle with an always-on "Reasoning Effort:" header.
     return (
-        ctx.has_text("")
+        ctx.has_text("[gMASK]<sop>")
         and ctx.has_text("Reasoning Effort:")
         and not ctx.has_text("enable_thinking")
         and ctx.has_text("<tool_call>")
-        and ctx.has_text("<tool_call>")
-        and ctx.has_text("<tool_call>")
+        and ctx.has_text("<arg_key>")
+        and ctx.has_text("<arg_value>")
     )
 
 
@@ -531,6 +550,7 @@ REASONING_PARSER_RULES = (
     DetectionRule(name="kimi", value="kimi", predicate=_is_kimi),
     DetectionRule(name="interns1", value="interns1", predicate=_is_interns1),
     DetectionRule(name="mistral", value="mistral", predicate=_is_mistral),
+    DetectionRule(name="beam", value="beam", predicate=_is_beam),
     DetectionRule(name="gpt_oss", value="gpt-oss", predicate=_is_gpt_oss),
     DetectionRule(name="kimi_k2", value="kimi_k2", predicate=_is_kimi_k2),
     DetectionRule(
@@ -575,6 +595,7 @@ TOOL_CALL_PARSER_RULES = (
     DetectionRule(name="k2_horizon", value="k2_horizon", predicate=_is_k2_v3),
     DetectionRule(name="apertus2509", value="apertus2509", predicate=_is_apertus2509),
     DetectionRule(name="gemma4", value="gemma4", predicate=_is_gemma4),
+    DetectionRule(name="beam", value="beam", predicate=_is_beam),
     DetectionRule(name="gpt_oss", value="gpt-oss", predicate=_is_gpt_oss),
     DetectionRule(name="kimi_k2", value="kimi_k2", predicate=_is_kimi_k2),
     DetectionRule(name="minimax_m3", value="minimax-m3", predicate=_is_minimax_m3),
@@ -706,6 +727,17 @@ def detect_tool_call_parser(
     return match_rules(ctx, TOOL_CALL_PARSER_RULES, "tool-call parser")
 
 
+def is_glm53_template(template: Optional[str]) -> bool:
+    """True if ``template`` is a GLM-5.3 family chat template."""
+    if not template:
+        return False
+    return _is_glm53(
+        TemplateDetectionContext(
+            template=template, reasoning_config=None, force_reasoning=False, vocab=set()
+        )
+    )
+
+
 def detect_inline_system_support(chat_template: Optional[str]) -> bool:
     """True if mid-conversation ``role: "system"`` renders inline; False if the
     template raises or silently drops it (then merge into the leading block).
@@ -750,7 +782,6 @@ def _detect_auto_parser(
             f"Auto-detected --{attr.replace('_', '-')} as '{detected}' from chat template"
         )
         return detected
-    _log_undetected_parser(attr, label)
     return None
 
 
@@ -772,18 +803,59 @@ def _log_undetected_parser(attr: str, label: str) -> None:
     )
 
 
+def _declare_python_template_parsers(server_args, template, needs) -> None:
+    """Resolve the ``auto`` parsers to the ones a Python chat template declares."""
+    detected = {attr: getattr(template, attr) for attr in needs}
+    for attr, value in detected.items():
+        logger.info(
+            f"Auto-detected --{attr.replace('_', '-')} as '{value}' from "
+            f"Python chat template '{template.name}'"
+        )
+    declare_resolution(server_args, "template-detection", **detected)
+
+
+def _checkpoint_python_chat_template(server_args, template):
+    """The Python chat template replacing the checkpoint's ``template``, if any.
+
+    Mirrors TemplateManager's selection when ``--chat-template`` is not set.
+    """
+    from llm_router_utils.sglang.srt.parser.python_chat_template import (
+        may_replace_jinja_template,
+        resolve_python_chat_template,
+    )
+
+    if not may_replace_jinja_template(template):
+        return None
+
+    cfg = resolving_view(server_args)
+    try:
+        from llm_router_utils.sglang.srt.utils.hf_transformers import get_config
+
+        config = get_config(
+            cfg.model_path,
+            trust_remote_code=cfg.trust_remote_code,
+            revision=getattr(cfg, "revision", None),
+            model_config_parser=getattr(cfg, "model_config_parser", "auto"),
+        )
+    except Exception as e:
+        logger.warning(
+            "Failed to load model config to resolve a Python chat template: %s", e
+        )
+        return None
+    return resolve_python_chat_template(config, template)
+
+
 def _architecture_auto_parsers(server_args, needs: Tuple[str, ...]) -> Dict[str, str]:
     """The parsers the model architecture implies, for the fields still on auto."""
-    from llm_router_utils.sglang.srt.entrypoints.openai.chat_encoding import (
-        is_deepseek_v41_arch,
-    )
+    from llm_router_utils.sglang.srt.entrypoints.openai.chat_encoding import is_deepseek_v41_arch
     from llm_router_utils.sglang.srt.utils.hf_transformers import get_config
 
+    cfg = resolving_view(server_args)
     config = get_config(
-        server_args.model_path,
-        trust_remote_code=server_args.trust_remote_code,
-        revision=getattr(server_args, "revision", None),
-        model_config_parser=getattr(server_args, "model_config_parser", "auto"),
+        cfg.model_path,
+        trust_remote_code=cfg.trust_remote_code,
+        revision=getattr(cfg, "revision", None),
+        model_config_parser=getattr(cfg, "model_config_parser", "auto"),
     )
     architectures = getattr(config, "architectures", None) or []
     arch = architectures[0] if architectures else ""
@@ -828,25 +900,85 @@ def _architecture_auto_parsers(server_args, needs: Tuple[str, ...]) -> Dict[str,
     return resolved
 
 
+def _architecture_parser_defaults(server_args) -> Dict[str, str]:
+    """Parser defaults implied by an architecture when the caller omitted them."""
+    cfg = resolving_view(server_args)
+    missing = tuple(
+        attr
+        for attr in ("reasoning_parser", "tool_call_parser")
+        if getattr(cfg, attr) is None
+    )
+    if not missing:
+        return {}
+
+    model_config = getattr(server_args, "_model_config", None)
+    if model_config is None:
+        return {}
+    config = model_config.hf_config
+    architectures = getattr(config, "architectures", None) or []
+    arch = architectures[0] if architectures else ""
+    if arch != "MuseSparkForConditionalGeneration":
+        return {}
+
+    defaults = {attr: "muse" for attr in missing}
+    for attr, value in defaults.items():
+        logger.info(
+            "Defaulting --%s to '%s' for model architecture '%s'",
+            attr.replace("_", "-"),
+            value,
+            arch,
+        )
+    return defaults
+
+
 def resolve_auto_parsers(server_args) -> None:
-    """Resolve ``--reasoning-parser=auto`` / ``--tool-call-parser=auto`` from the
-    chat template, before anything publishes ``server_args``.
+    """Resolve architecture defaults and explicit ``auto`` parser requests;
+    ``auto`` is detected from the chat template or checkpoint metadata.
 
     Performs a lightweight tokenizer load, so it runs once in engine init. The
-    decision is applied to this instance so every holder of it carries it --
-    the HTTP server and the tokenizer workers it is serialized for.
+    decision goes to this instance's declaration stash, so every holder of it
+    carries it -- the schedulers it forks, the HTTP server, the tokenizer
+    workers it is serialized for -- and each publishes bags projected from it.
+    The fields stay what the operator passed.
     """
+    architecture_defaults = _architecture_parser_defaults(server_args)
+    if architecture_defaults:
+        declare_resolution(
+            server_args,
+            "architecture-parser-defaults",
+            **architecture_defaults,
+        )
+
+    chat_template_default = muse_spark_chat_template_default(server_args)
+    if chat_template_default is not None:
+        declare_resolution(
+            server_args,
+            "architecture-chat-template-default",
+            chat_template=chat_template_default,
+        )
+
+    cfg = resolving_view(server_args)
     needs = tuple(
         attr
         for attr in ("reasoning_parser", "tool_call_parser")
-        if getattr(server_args, attr) == "auto"
+        if getattr(cfg, attr) == "auto"
     )
     if not needs:
         return
 
+    chat_template_arg = getattr(cfg, "chat_template", None)
+    if isinstance(chat_template_arg, str):
+        from llm_router_utils.sglang.srt.parser.python_chat_template import get_python_chat_template
+
+        # A built-in Python chat template declares its parsers, so neither the
+        # tokenizer nor a Jinja source needs loading.
+        python_template = get_python_chat_template(chat_template_arg)
+        if python_template is not None:
+            _declare_python_template_parsers(server_args, python_template, needs)
+            return
+
     from llm_router_utils.sglang.srt.utils.hf_transformers import get_tokenizer
 
-    chat_template_arg = getattr(server_args, "chat_template", None)
     try:
         explicit_jinja_template = _load_explicit_jinja_template(chat_template_arg)
     except Exception as e:
@@ -859,8 +991,11 @@ def resolve_auto_parsers(server_args) -> None:
     tokenizer = None
     try:
         tokenizer = get_tokenizer(
-            server_args.model_path,
-            trust_remote_code=server_args.trust_remote_code,
+            cfg.tokenizer_path,
+            tokenizer_mode=cfg.tokenizer_mode,
+            trust_remote_code=cfg.trust_remote_code,
+            revision=cfg.revision,
+            tokenizer_backend=cfg.tokenizer_backend,
         )
     except Exception as e:
         logger.warning(f"Failed to load tokenizer for auto-detection: {e}")
@@ -868,6 +1003,14 @@ def resolve_auto_parsers(server_args) -> None:
     template = explicit_jinja_template
     if template is None and tokenizer is not None:
         template = getattr(tokenizer, "chat_template", None)
+
+    # A Python chat template replacing the checkpoint's renders this model's
+    # prompts, so its declared parsers decide; the Jinja source is not consulted.
+    if chat_template_arg is None:
+        python_template = _checkpoint_python_chat_template(server_args, template)
+        if python_template is not None:
+            _declare_python_template_parsers(server_args, python_template, needs)
+            return
 
     force_reasoning, reasoning_config = detect_reasoning_pattern(template)
     ctx = build_detection_context(
@@ -895,7 +1038,6 @@ def resolve_auto_parsers(server_args) -> None:
             ("tool_call_parser", "tool-call parser"),
         ):
             if attr in needs and attr not in detected:
-                _log_undetected_parser(attr, label)
                 detected[attr] = None
     else:
         for attr, rules, label in (
@@ -905,13 +1047,42 @@ def resolve_auto_parsers(server_args) -> None:
             if attr in needs:
                 detected[attr] = _detect_auto_parser(attr, ctx, rules, label)
 
+    unresolved = tuple(attr for attr in needs if detected.get(attr) is None)
+    if unresolved and tokenizer is not None and chat_template_arg is None:
+        from llm_router_utils.sglang.srt.parser.response_template import (
+            resolve_response_template,
+            validate_response_template_for_serving,
+        )
+
+        response_template = resolve_response_template(tokenizer)
+        if response_template is not None:
+            try:
+                response_template = validate_response_template_for_serving(
+                    response_template
+                )
+            except (TypeError, ValueError) as exc:
+                logger.warning(
+                    "Ignoring invalid response_template from tokenizer configuration: %s",
+                    exc,
+                )
+            else:
+                for attr, field in (
+                    ("reasoning_parser", "thinking"),
+                    ("tool_call_parser", "tool_calls"),
+                ):
+                    if attr in unresolved and field in response_template.fields:
+                        detected[attr] = "response_template"
+                        logger.info(
+                            "Auto-detected --%s as 'response_template' from tokenizer configuration",
+                            attr.replace("_", "-"),
+                        )
+
+    for attr, label in (
+        ("reasoning_parser", "reasoning parser"),
+        ("tool_call_parser", "tool-call parser"),
+    ):
+        if attr in needs and detected.get(attr) is None:
+            _log_undetected_parser(attr, label)
+
     if detected:
-        # llm-router-utils does not carry sglang's config-bag / runtime_context
-        # system, so apply the resolved fields directly via the in-place
-        # override hook that server_args exposes (or setattr for stand-ins).
-        override = getattr(server_args, "override", None)
-        if callable(override):
-            override(source="template-detection", **detected)
-        else:
-            for key, value in detected.items():
-                setattr(server_args, key, value)
+        declare_resolution(server_args, "template-detection", **detected)

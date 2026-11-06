@@ -186,6 +186,8 @@ make check-license                          # 4. Apache 2.0 §4 attribution
 
 All tests must pass. If upstream changed an implementation (e.g. the inkling_detector rewrite), the corresponding tests must be synced to the new upstream version.
 
+Passing tests are necessary but **not** sufficient: a green suite is also what a vacuous guard produces. For every guard test added this upgrade, revert the fix in a scratch worktree and confirm the guard fails — see [Guard Tests Must Be Mutation-Verified](#guard-tests-must-be-mutation-verified).
+
 ### Torch-import check
 
 ```bash
@@ -208,7 +210,9 @@ This diffs every retained `src/llm_router_utils/sglang/srt/**/*.py` against its 
 - **sanctioned slimming** — pure deletions or expected-pattern diffs only,
 - **logic drift** — substantive divergence requiring human review.
 
-Deliberately slimmed files (`serving_chat.py`, `model_config.py`, `template_detection.py`, `server_args.py`, `utils/common.py`, etc.) legitimately show logic drift because of Protocol annotations, deleted methods, and `hf_transformers_utils` → `transformers` substitutions that a generic normalizer cannot safely collapse. Their paths are recorded in `scripts/parity_baseline.txt`. The check **fails only on NEW logic drift** (a regression); baselined files are reported but do not fail the check.
+Deliberately slimmed files (`model_config.py`, `template_detection.py`, `server_args.py`, `utils/common.py`, etc.) legitimately show logic drift because of Protocol annotations, deleted methods, and `hf_transformers_utils` → `transformers` substitutions that a generic normalizer cannot safely collapse. Their paths are recorded in `scripts/parity_baseline.txt`. The check **fails only on NEW logic drift** (a regression); baselined files are reported but do not fail the check.
+
+**`serving_chat.py` is not in that set, and must not be.** It is upstream-identical apart from the import rewrite, so it belongs in the `match` class. That makes deletions there dangerous: the "pure deletion = sanctioned slimming" rule cannot tell cutting a whole method (the normal shape of extraction) from cutting a statement inside a method that is still called — deleting the streaming `generate_request` loop would have been classified as slimming and passed. `scripts/check_parity.py` therefore declares `_MUST_MATCH_FILES`: any hunk in a listed file is logic drift, deletions included. Add a path there when a file's byte-identity is load-bearing; do not weaken the rule to make a deletion pass.
 
 When you legitimately add or remove a slimmed file, regenerate the baseline:
 
@@ -219,7 +223,7 @@ make update-parity-baseline
 Inspect the diff of `scripts/parity_baseline.txt` before committing — it should only change when the set of slimmed files intentionally changes, never as a side effect of an upgrade. To audit a specific file's diff in full:
 
 ```bash
-python scripts/check_parity.py --diff srt/function_call/inkling_detector.py
+python scripts/check_parity.py --diff function_call/inkling_detector.py
 python scripts/check_parity.py --show-diffs          # all logic-drift files
 python scripts/check_parity.py --no-baseline         # fail on any drift, ignore baseline
 ```
@@ -324,6 +328,7 @@ python -c "import urllib.request, json; d=json.load(urllib.request.urlopen('http
 ### Release checklist
 
 - [ ] All four checks pass (pytest, check-torch, check-parity, check-license)
+- [ ] Every guard test added this upgrade has a recorded reversion proof (see [Guard Tests Must Be Mutation-Verified](#guard-tests-must-be-mutation-verified))
 - [ ] Dependency pins in `pyproject.toml` match the tracked upstream release (Step 3.5)
 - [ ] `pyproject.toml` and `_version.py` bumped to the same version
 - [ ] `PYTHONPATH=src python -c "from llm_router_utils import __version__"` prints the new version
@@ -343,6 +348,226 @@ python -c "import urllib.request, json; d=json.load(urllib.request.urlopen('http
 - **CRLF**: a Windows checkout produces CRLF line endings; use `diff --strip-trailing-cr` when comparing against upstream LF.
 - **"No change needed" for slimmed files**: if every upstream change lands in already-stripped inference-engine code (scheduling, dispatch, metrics, cuda-graph, etc.), the slimmed version needs no change. Verify this file-by-file.
 - **Stale dependency pins after an upgrade**: bumping the submodule does not update `pyproject.toml`. Always run the pin diff in Step 3.5 — a missed pin (like `transformers==5.12.1` surviving three upstream bumps) silently tests against an old library version.
+- **Capabilities extracted into compiled platform-specific packages**: check upstream's `pyproject.toml` for new pins guarded by `sys_platform` / `platform_machine` markers. v0.5.23 moved DeepSeek-V4/V4.1 encoding into `deepseek-recipe` and Inkling rendering into `tml-renderers`; neither ships a Windows wheel. Mirror the marker exactly — do not silently promote such a package to an install-required dependency.
+- **Tests that import a newly-extracted package**: sync the test from upstream first, then guard each class that reaches the extension with `unittest.skipUnless(<package imports>, "...")`. Guard the *whole* file's dependency surface — a module-level helper (e.g. `_ids()` calling `load_tml_renderers()`) can drag a second class into the dependency even when the class body looks independent. See `test/unit/parser/test_inkling_renderer.py` and `test/unit/function_call/test_deepseekv41_detector.py`.
+- **Do not leave a test at the old version when the code under test changed**: a stale test plus a `skipUnless` guard is the worst combination — it looks protected, passes green everywhere the extension is absent, and silently drops the golden-reference assertions where it is present. Compare method sets against upstream (`python - <<` an AST diff) after every sync.
+- **Upstream test fixtures that assume `msgspec.Struct`**: this repo's `ServerArgs` is a plain dataclass, so `msgspec.Struct.__setattr__(args, ...)` must become `object.__setattr__(args, ...)` when syncing a test.
+- **JSON/`.jinja` fixtures copied via PowerShell**: `>` and `Out-File` emit UTF-16/BOM, which breaks `json.loads` and jinja reads with a `UnicodeDecodeError`. Always re-encode as UTF-8 without BOM (`[System.IO.File]::WriteAllText(path, text, (New-Object System.Text.UTF8Encoding($false)))`) and diff against the upstream fixture to confirm.
+
+## Guard Tests Must Be Mutation-Verified
+
+**A guard that has never been seen to fail is not a guard — it is a comment that
+runs.** Every test added to protect an upgrade must ship with a proof that it
+fails when the thing it protects is reverted. Without that proof the test's green
+result carries no information, and a green suite is exactly where a real
+regression hides.
+
+This is not a theoretical caution. On the v0.9.0 upgrade alone, four separate
+guards were written, reviewed, reported as passing, and turned out to assert
+nothing:
+
+| Guard | What it actually asserted | What it caught |
+|---|---|---|
+| `test_io_struct_surface.py` with `parents[4]` | `[] == []` — the scan root did not exist | nothing; a deleted `GenerateReqInput` field still passed |
+| `_resolve_lora_path` guard via `hasattr` | that the method existed | **certified a reversed parameter order as correct** |
+| `use_runtime_context` `_UNSET` test | nothing observable | all 32 tests stayed green with the fix reverted |
+| `extract_custom_labels` test | an attribute set by hand in the test | a state no caller could ever produce |
+
+The common thread is that each one asserted a *shape* (the name exists, the call
+returns, the list is empty) rather than a *behaviour* that changes when the code
+changes. **Assert the observable consequence, not the presence of the symbol.**
+
+### The procedure
+
+Revert only the fix, keep every test, and confirm the guard fails:
+
+```bash
+git worktree add C:\Temp\mut verify-shares-target    # never on the main checkout
+# in the worktree: undo the src/ fix, leave the test untouched
+cd C:\Temp\mut && PYTHONPATH=src python -m pytest <the guard> -q
+```
+
+It must fail, and for the **right reason** — read the assertion message, do not
+just check the exit code. A guard that fails because of a syntax error or a bad
+import path proves nothing.
+
+Two things to watch on Windows:
+
+- **Absolute paths only.** `[System.IO.File]::WriteAllText("relative/path", ...)`
+  resolves against the .NET process directory, not the shell's cwd. A reviewer
+  destroyed uncommitted work this way. Write scratch files to `C:\Temp` and always
+  pass a fully absolute path.
+- **The submodule does not come along.** A worktree has an empty `vendor/sglang`,
+  so `check-parity` aborts with "upstream root not found". Junction the real one
+  in: `cmd /c mklink /J C:\Temp\mut\vendor\sglang <repo>\vendor\sglang`.
+
+### Guards must also fail safely
+
+Verifying the guard is necessary but not sufficient — it must also not become
+vacuous later. Prefer a guard that breaks loudly over one that degrades to
+nothing:
+
+- Assert the scan root **exists** and yields **something** before asserting
+  anything about its contents (`test_retained_tree_resolves`,
+  `test_the_scan_has_call_sites_to_scan` in `test_io_struct_surface.py`).
+- Set a **floor** on how many items the scan must find, not an exact count, so
+  adding a call site does not break CI but a path regression does.
+- When a floor genuinely cannot apply — `EmbeddingReqInput` has zero construction
+  sites today — omit that target rather than lowering the floor for all of them.
+
+### What counts as a behaviour assertion
+
+| Weak | Strong |
+|---|---|
+| `hasattr(cls, "extract_custom_labels")` | call it through the real `__init__` path with a header present, assert the labels come back |
+| `assertEqual(missing, [])` where `missing` is computed from a path that may not exist | assert the input set is non-empty first |
+| test sets `obj.allowed_custom_labels = [...]` by hand | drive the value from `ServerArgs` / the request, as a consumer would |
+| asserting a function returns non-`None` | asserting the 180-case differential against upstream matches |
+
+## Shim Fidelity
+
+The hand-written shims (`runtime_context.py`, `arg_groups/*`, `sampling/sampling_params.py`) are the highest-risk part of any upgrade, because `check-parity` can only see that they are *different* — not that they are *wrong*. Two failure modes have already occurred; guard against both:
+
+1. **Hand-maintained allowlists drift.** `_ServingConfig` originally listed the serving fields explicitly and omitted `hf_chat_template_name`, which silently downgraded every model with a dict of named HF chat templates (the `AttributeError` was swallowed by an upstream `except Exception` and degraded to a warning). Shims must **pass through to the real object** and use a defaults dict only when nothing is installed, so an upstream rename fails loudly once instead of silently forever.
+2. **API-shaped but behaviourally wrong.** `resolving_view()` returned a read-only proxy but dropped upstream's live re-read of `_resolved_overrides`, making `resolve_auto_parsers`' declarations invisible. When slimming a class, port the `__getattr__` body, not just the shape.
+
+**Before merging any upgrade**, grep the retained tree for every attribute read off each shim and assert it resolves:
+
+```python
+# e.g. for runtime_context
+import re, pathlib
+src = pathlib.Path("src/llm_router_utils/sglang/srt/entrypoints/openai/serving_chat.py").read_text()
+for f in set(re.findall(r"get_serving\(\)\.(\w+)", src)):
+    getattr(get_serving(), f)          # raises if the shim is missing it
+```
+
+Also assert the *wiring* exists: a shim whose setter has zero callers fails closed at runtime. `set_runtime_context` must be called from `TokenizerManager.init_model_config` before `OpenAIServingChat` reads `get_model()`.
+
+## Upgrade Deviations
+
+Deliberate, documented departures from upstream that a future upgrade must preserve.
+
+### v0.9.0 (sglang v0.5.23)
+
+Upstream v0.5.23 replaced its in-tree DeepSeek-V4/V4.1 encoders
+(`entrypoints/openai/encoding_dsv4.py`, `encoding_dsv41.py`) with DeepSeek's
+native `deepseek-recipe` extension, and routed Inkling through `tml-renderers`.
+Both are compiled, both lack Windows wheels, and both are pinned upstream behind
+platform markers.
+
+This repo follows upstream: the two vendored encoders were **deleted**, and
+`pyproject.toml` carries the same platform markers. Consequences:
+
+- `deepseek-recipe` is a **hard** dependency on Linux/macOS and absent on
+  Windows, where `dsv4`/`dsv41` encodings raise an `ImportError` naming the
+  package.
+- `tml-renderers` is an **optional** `inkling` extra, because it additionally
+  requires PyTorch >= 2.10, which this package otherwise avoids.
+- The corresponding tests are platform-guarded, not removed.
+
+### Stub modules
+
+Three upstream subsystems were replaced by minimal behavioural shims rather
+than being carried over. They are recorded in `scripts/parity_baseline.txt`, so
+the parity checker will not flag them; keep them slim rather than adopting
+upstream wholesale on later upgrades.
+
+| Module | Upstream | Shim |
+|---|---|---|
+| `srt/runtime_context.py` | ~2,200-line process-wide config publication layer (arg-group namespaces, role-scoped reads) | `get_serving()` / `get_model()` read-only proxies over `ServerArgs` / `ModelConfig` |
+| `srt/arg_groups/` | CLI/env/model-override resolution machinery | resolution stash (`declare_resolution` / `resolution_result`) + read-only resolving view |
+| `srt/sampling/sampling_params.py` | full `SamplingParams` struct + watermark validation (torch) | the two private request-transport helpers `serving_chat` uses |
+| `srt/entrypoints/openai/serving_base.py` | 300-line ABC owning HTTP handling **and** the helper surface `serving_chat` calls | `handle_request` and the two `_handle_*_request` dispatchers dropped; every non-HTTP helper kept (`create_error_response`, `create_streaming_error_response`, `_parse_model_parameter`, `_resolve_lora_path`, `extract_custom_labels`, `extract_routing_key`, `extract_routed_dp_rank_from_header`, `_request_id_prefix`, `_generate_request_id_base`) |
+
+**`serving_base.py` must stay wide enough for `serving_chat.py`.** Because
+`serving_chat.py` is upstream-identical, it calls the upstream base API; a
+narrower base class raises `AttributeError` at runtime while every test that
+only exercises `_process_messages` still passes. This actually happened. The
+guard is `test/unit/entrypoints/openai/test_serving_base_surface.py`, which
+AST-walks every `self.<name>` read in `serving_chat.py` and asserts it resolves
+on the base class — extend its exclusion set only for genuine instance
+attributes, never to silence a missing method.
+
+The same "wider than the shim" problem applies to objects reached *through* a
+base attribute, and there the guard deliberately stops. `tokenizer_manager` is
+excluded from that AST scan because it is an instance attribute, checked by its
+own test; but `serving_chat.py` also calls `self.tokenizer_manager.generate_request`
+and `self.tokenizer_manager.create_abort_task`, and neither exists on the shim
+(`TokenizerManager` provides only `config_value`, `init_model_config`,
+`init_tokenizer_and_processor`, `resolve_auto_parsers`, plus loaded state).
+That is **by design, not drift**: both live on the engine boundary
+(`handle_request` / abort handling) that this repo drops, so no retained code
+path reaches them. It is recorded here because the surface *demand* grows with
+upstream: if a future upgrade calls a new `tokenizer_manager` method from a
+retained path, that needs a real shim method, and this note is where to notice it.
+The same caution applies to `SamplingParams`, `TokenProcessorOutput` and any
+other slimmed class constructed by a byte-identical file — see
+`test/unit/managers/test_io_struct_surface.py`, whose scan root assertion fails
+loudly if the AST walk ever stops reaching the retained tree.
+
+Two branches inside these shims are **inert by construction** — do not mistake
+them for working features when reviewing a future upgrade:
+
+| Inert branch | Why |
+|---|---|
+| `_architecture_parser_defaults` (`template_detection.py`) | early-returns `{}` because nothing ever attaches `ServerArgs._model_config`; no `src/` code assigns it |
+| `muse_spark_chat_template_default` (`arg_groups/muse_spark_hook.py`) | hard-coded `return None`; upstream derives `--chat-template` from the checkpoint during launch, which this repo does not do |
+
+Architecture-derived parser defaults and Muse Spark template defaulting are
+therefore unsupported. If a future version needs them, the shim has to grow a
+real `_model_config` attachment first — not just delete the early return.
+
+`managers/tokenizer_manager.py` gained a `config_value()` method returning the
+*resolved* value — it consults the declaration stash via `resolution_result`, not
+just the raw `ServerArgs` field. Reading the raw field silently returned `"auto"`
+for every `--*-parser auto` field, disabling tool-call parsing and turn grammar.
+`_DECLARED_ONLY_DEFAULTS` covers fields that exist upstream only as a
+declaration (`grammar_backend` → `"xgrammar"`).
+
+**The stash is only useful if something populates it.** Upstream calls
+`resolve_auto_parsers` once from `entrypoints/engine.py` before the tokenizer is
+built; that module does not exist here, so the resolution never ran and every
+`auto` field survived as the literal sentinel. `TokenizerManager` now calls it
+in `__init__`, *before* `init_tokenizer_and_processor` (detection loads its own
+tokenizer), best-effort. As a backstop, `config_value` raises on an unresolved
+sentinel for the parser fields rather than handing a caller `"auto"` — a value
+`ToolCallParserEnum.get()` maps to `None`, which accepts tool calls and then
+silently never parses them.
+
+`runtime_context` keeps two levels: `set_runtime_context(...)` registers the
+process default (last writer wins), and `use_runtime_context(...)` binds a
+`ContextVar` scope that both accessors prefer. Pass `None` explicitly to clear a
+slot — omitting an argument leaves it unchanged.
+
+**Scope construction, not requests.** `hf_chat_template_name`,
+`default_chat_template_kwargs` and the encoding adapter's `revision` are read
+during `TokenizerManager`/`TemplateManager`/`OpenAIServingChat` construction, so
+they are captured into the instance and a request-time scope cannot restore
+them. A multi-model router must build each model's objects inside that model's
+`use_runtime_context` block. `test/unit/test_runtime_context.py` pins both
+halves (`test_construction_scoped_builds_see_their_own_config` and
+`test_request_time_scope_cannot_restore_setup_time_values`).
+
+Because these shims are in the baseline, `check-parity` will report them as
+"baselined" rather than failing. Review them by hand when upstream touches the
+corresponding real modules, and widen a shim only when a retained caller needs
+more of the upstream surface.
+
+## Release Checklist Addition
+
+Before tagging, confirm for every upgrade that removes or gates a capability:
+
+- [ ] README has an explicit **breaking change** note naming the version it
+      changed in and what users lose (e.g. `dsv4`/`dsv41` on Windows in v0.9.0).
+- [ ] Deleted public module paths are called out by name.
+- [ ] Any new platform-gated extra records the Python floor its wheels impose
+      (`tml-renderers` is `cp311-abi3`, so the `inkling` extra needs >= 3.11
+      even though the base package supports 3.10).
+- [ ] `make check-version` passes: `pyproject.toml`, `_version.py`, the README
+      Version Mapping row and the `.gitmodules` submodule branch all agree.
+- [ ] `platform-extras` CI asserts an exact pass count, not merely "no skips" —
+      `no tests ran`, `N deselected` and `N xfailed` all lack the word
+      "skipped" and would otherwise pass green.
 
 ## Version Table
 
