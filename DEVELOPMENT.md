@@ -208,7 +208,9 @@ This diffs every retained `src/llm_router_utils/sglang/srt/**/*.py` against its 
 - **sanctioned slimming** — pure deletions or expected-pattern diffs only,
 - **logic drift** — substantive divergence requiring human review.
 
-Deliberately slimmed files (`serving_chat.py`, `model_config.py`, `template_detection.py`, `server_args.py`, `utils/common.py`, etc.) legitimately show logic drift because of Protocol annotations, deleted methods, and `hf_transformers_utils` → `transformers` substitutions that a generic normalizer cannot safely collapse. Their paths are recorded in `scripts/parity_baseline.txt`. The check **fails only on NEW logic drift** (a regression); baselined files are reported but do not fail the check.
+Deliberately slimmed files (`model_config.py`, `template_detection.py`, `server_args.py`, `utils/common.py`, etc.) legitimately show logic drift because of Protocol annotations, deleted methods, and `hf_transformers_utils` → `transformers` substitutions that a generic normalizer cannot safely collapse. Their paths are recorded in `scripts/parity_baseline.txt`. The check **fails only on NEW logic drift** (a regression); baselined files are reported but do not fail the check.
+
+**`serving_chat.py` is not in that set, and must not be.** It is upstream-identical apart from the import rewrite, so it belongs in the `match` class. That makes deletions there dangerous: the "pure deletion = sanctioned slimming" rule cannot tell cutting a whole method (the normal shape of extraction) from cutting a statement inside a method that is still called — deleting the streaming `generate_request` loop would have been classified as slimming and passed. `scripts/check_parity.py` therefore declares `_MUST_MATCH_FILES`: any hunk in a listed file is logic drift, deletions included. Add a path there when a file's byte-identity is load-bearing; do not weaken the rule to make a deletion pass.
 
 When you legitimately add or remove a slimmed file, regenerate the baseline:
 
@@ -219,7 +221,7 @@ make update-parity-baseline
 Inspect the diff of `scripts/parity_baseline.txt` before committing — it should only change when the set of slimmed files intentionally changes, never as a side effect of an upgrade. To audit a specific file's diff in full:
 
 ```bash
-python scripts/check_parity.py --diff srt/function_call/inkling_detector.py
+python scripts/check_parity.py --diff function_call/inkling_detector.py
 python scripts/check_parity.py --show-diffs          # all logic-drift files
 python scripts/check_parity.py --no-baseline         # fail on any drift, ignore baseline
 ```
@@ -412,6 +414,23 @@ guard is `test/unit/entrypoints/openai/test_serving_base_surface.py`, which
 AST-walks every `self.<name>` read in `serving_chat.py` and asserts it resolves
 on the base class — extend its exclusion set only for genuine instance
 attributes, never to silence a missing method.
+
+The same "wider than the shim" problem applies to objects reached *through* a
+base attribute, and there the guard deliberately stops. `tokenizer_manager` is
+excluded from that AST scan because it is an instance attribute, checked by its
+own test; but `serving_chat.py` also calls `self.tokenizer_manager.generate_request`
+and `self.tokenizer_manager.create_abort_task`, and neither exists on the shim
+(`TokenizerManager` provides only `config_value`, `init_model_config`,
+`init_tokenizer_and_processor`, `resolve_auto_parsers`, plus loaded state).
+That is **by design, not drift**: both live on the engine boundary
+(`handle_request` / abort handling) that this repo drops, so no retained code
+path reaches them. It is recorded here because the surface *demand* grows with
+upstream: if a future upgrade calls a new `tokenizer_manager` method from a
+retained path, that needs a real shim method, and this note is where to notice it.
+The same caution applies to `SamplingParams`, `TokenProcessorOutput` and any
+other slimmed class constructed by a byte-identical file — see
+`test/unit/managers/test_io_struct_surface.py`, whose scan root assertion fails
+loudly if the AST walk ever stops reaching the retained tree.
 
 Two branches inside these shims are **inert by construction** — do not mistake
 them for working features when reviewing a future upgrade:

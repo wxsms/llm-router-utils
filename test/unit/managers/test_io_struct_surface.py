@@ -17,13 +17,25 @@ import importlib
 import pathlib
 import unittest
 
-_SRT = (
-    pathlib.Path(__file__).resolve().parents[4]
-    / "src"
-    / "llm_router_utils"
-    / "sglang"
-    / "srt"
-)
+#: This file lives at ``test/unit/managers/``, so the repo root is three levels
+#: up. An earlier revision used ``parents[4]`` -- copied from
+#: ``test/unit/entrypoints/openai/test_serving_base_surface.py``, which sits two
+#: directories deeper -- and silently pointed at ``<drive>\src\...``, a path that
+#: does not exist. ``_keyword_args`` then returned an empty set for every class
+#: and the guard below asserted ``[] == []`` forever. ``test_the_scan_has_
+#: call_sites_to_scan`` now pins this: it fails on any path regression instead of
+#: passing vacuously.
+_SRT = pathlib.Path(__file__).resolve().parents[3] / "src" / "llm_router_utils" / "sglang" / "srt"
+
+#: Floors on how many construction sites the scan must find. These are not exact
+#: counts (adding a call site must not break CI); they are high enough that a
+#: path or parsing regression drops below them and fails, which is the failure
+#: mode that made this file vacuous. ``EmbeddingReqInput`` is deliberately absent:
+#: no retained file constructs it today, so it has no floor to defend.
+_MIN_CALL_SITES = {
+    "GenerateReqInput": 30,
+    "MessageProcessingResult": 5,
+}
 
 #: Construction sites to audit, and how to import the class they build.
 _TARGETS = {
@@ -54,6 +66,39 @@ def _keyword_args(class_name: str) -> set[str]:
 
 
 class TestConstructionSurface(unittest.TestCase):
+    def test_retained_tree_resolves(self):
+        """The scan root must exist before any assertion about it is meaningful.
+
+        Without this, a wrong ``parents[...]`` depth turns every assertion below
+        into ``[] == []``. That is not hypothetical: it is exactly what shipped.
+        """
+        self.assertTrue(
+            _SRT.is_dir(),
+            f"scan root does not exist: {_SRT}. A wrong parents[...] depth makes "
+            "every keyword assertion in this file vacuous.",
+        )
+        self.assertTrue(
+            any(_SRT.rglob("*.py")),
+            f"scan root contains no Python files: {_SRT}",
+        )
+
+    def test_the_scan_has_call_sites_to_scan(self):
+        """Each guarded class must actually be constructed somewhere.
+
+        A path or AST regression shows up here as a drop to zero rather than as a
+        silently-passing equality check below.
+        """
+        for class_name, floor in _MIN_CALL_SITES.items():
+            with self.subTest(cls=class_name):
+                used = _keyword_args(class_name)
+                self.assertGreaterEqual(
+                    len(used),
+                    floor,
+                    f"only {len(used)} keyword(s) found at {class_name}(...) call "
+                    f"sites, expected at least {floor}. The scan is no longer "
+                    "reaching the retained tree, so the guard below is vacuous.",
+                )
+
     def test_every_constructed_keyword_is_a_field(self):
         for class_name, module_path in _TARGETS.items():
             with self.subTest(cls=class_name):

@@ -35,8 +35,11 @@ do not affect the exit code.
 Usage::
 
     python scripts/check_parity.py
-    python scripts/check_parity.py --rel-path srt/function_call/inkling_detector.py
-    python scripts/check_parity.py --diff srt/parser/reasoning_parser.py
+    python scripts/check_parity.py --rel-path function_call/inkling_detector.py
+    python scripts/check_parity.py --diff parser/reasoning_parser.py
+
+Paths are relative to the retained root (``.../sglang/srt``): omit the ``srt/``
+prefix, or the run aborts with "No retained files matched".
 """
 
 from __future__ import annotations
@@ -412,7 +415,32 @@ def _is_sanctioned_import_line(line: str, counterpart: str | None) -> bool:
     ).strip()
 
 
-def _classify_hunk(diff_lines: list[str]) -> str:
+#: Files that must remain byte-identical to upstream, so that **any** hunk -- a
+#: deletion included -- counts as logic drift.
+#:
+#: ``_classify_hunk`` treats a pure deletion as sanctioned slimming, because
+#: extracting this repo means cutting methods and a deleted method is the normal
+#: shape of that. But the rule cannot tell "dropped a whole method" from "dropped
+#: a statement inside a method that is still there" -- both are pure deletions.
+#: That made the gate blind where it matters most: deleting the
+#: ``async for content in self.tokenizer_manager.generate_request(...)`` loop from
+#: ``serving_chat.py`` produced ``hunks=['expected','slimming']`` and
+#: ``OK: no new logic drift`` with exit 0, even though that file is documented as
+#: identical to upstream apart from import rewriting (README, CLAUDE.md).
+#:
+#: No context-free heuristic separates a feature-removing deletion (the GGUF
+#: branch dropped from ``utils/hf_transformers/tokenizer.py``, legitimately
+#: slimming) from a behaviour-removing one (the streaming loop above, a
+#: regression), so the distinction is *declared* here rather than guessed. Add a
+#: path when a file's byte-identity is load-bearing.
+_MUST_MATCH_FILES = frozenset(
+    {
+        "entrypoints/openai/serving_chat.py",
+    }
+)
+
+
+def _classify_hunk(diff_lines: list[str], *, must_match: bool = False) -> str:
     """Classify a unified-diff hunk as 'expected', 'slimming', or 'logic'.
 
     - 'expected': every changed line matches a known slimming pattern
@@ -422,7 +450,16 @@ def _classify_hunk(diff_lines: list[str]) -> str:
       substantive additions. Deletions are sanctioned slimming per CLAUDE.md
       ("Only delete or slim"). Blank-only additions are allowed.
     - 'logic': anything else — real divergence to investigate.
+
+    ``must_match`` is set for files in :data:`_MUST_MATCH_FILES`, where deleting
+    is not sanctioned: any changed line there is 'logic' drift.
     """
+    if must_match and any(
+        line.startswith(("+", "-")) and not line.startswith(("+++", "---"))
+        for line in diff_lines
+    ):
+        return "logic"
+
     added = [l[1:] for l in diff_lines if l.startswith("+") and not l.startswith("+++")]
     removed = [l[1:] for l in diff_lines if l.startswith("-") and not l.startswith("---")]
     changed = added + removed
@@ -515,16 +552,17 @@ def compare_file(retained: Path) -> FileResult:
     diff_text = "".join(diff_lines)
 
     # Classify each hunk. A hunk starts with a ``@@`` line.
+    must_match = rel in _MUST_MATCH_FILES
     hunk_classes: list[str] = []
     current: list[str] = []
     for line in diff_lines:
         if line.startswith("@@"):
             if current:
-                hunk_classes.append(_classify_hunk(current))
+                hunk_classes.append(_classify_hunk(current, must_match=must_match))
             current = []
         current.append(line)
     if current:
-        hunk_classes.append(_classify_hunk(current))
+        hunk_classes.append(_classify_hunk(current, must_match=must_match))
 
     logic_drift = any(c == "logic" for c in hunk_classes)
     return FileResult(
