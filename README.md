@@ -53,7 +53,7 @@ Migrated modules under `llm_router_utils/sglang/srt/` (paths preserved from upst
 |---|---|
 | `parser/` | Conversation templates (~50 model families), `ReasoningParser` + detectors, harmony/inkling, jinja utils, template detection, `TemplateManager` with `TokenizerLike` Protocol |
 | `function_call/` | `FunctionCallParser` + 44 detectors (hermes, glm, deepseek, qwen, kimi, mistral, muse-glimmer, …), `JsonArrayParser`, schema utils |
-| `entrypoints/openai/` | `protocol.py` (full OpenAI types), `serving_chat.py` (verbatim from upstream), `serving_base.py`, `chat_encoding.py` + `chat_encoding_adapters.py`, `encoding_dsv32.py`, `serving_deepseek_recipe.py`, `serving_inkling.py`, `parallel_prompt_encode.py`, `sse_utils.py`, `usage_processor.py`, `utils.py` |
+| `entrypoints/openai/` | `protocol.py` (full OpenAI types), `serving_chat.py` (identical to upstream apart from import rewriting), `serving_base.py`, `chat_encoding.py` + `chat_encoding_adapters.py`, `encoding_dsv32.py`, `serving_deepseek_recipe.py`, `serving_inkling.py`, `parallel_prompt_encode.py`, `sse_utils.py`, `usage_processor.py`, `utils.py` |
 | `parser/chat_parsing/` | Response-template parsers (`response_parser.py`, `content_parsers.py`, `response_templates.py`) backing the template tool-call/reasoning detectors |
 | `parser/response_template.py` | `ResponseTemplate*Detector` family plus response-template request configuration and grammar helpers |
 | `function_call/response_template_structural_tag.py` | Structural tags derived from a chat template's own framing; used by `beam_detector.py` |
@@ -155,11 +155,17 @@ the one constructed last wins. Single-model services are unaffected. A router
 that builds more than one manager must scope **both** construction and request
 handling, because the two groups read the global at different times:
 
-| Read at setup (construction) — scope the build | Read per request — scope the call |
-|---|---|
-| `hf_chat_template_name` (template initialisation) | `enable_cache_report` |
-| `default_chat_template_kwargs` (`__init__`) | `incremental_streaming_output` |
-| the encoding adapter's `revision` (`__init__`) | `return_input_ids` / `return_output_ids` |
+| Field | When it is read | Scope needed |
+|---|---|---|
+| `hf_chat_template_name` | template initialisation | construction |
+| `default_chat_template_kwargs` | `OpenAIServingChat.__init__` | construction |
+| encoding adapter's `revision` | `OpenAIServingChat.__init__` | construction |
+| `enable_cache_report` | per request | each request |
+| `incremental_streaming_output` | per request | each request |
+| `return_input_ids` / `return_output_ids` | per request | each request |
+| `stream_response_default_include_usage` | per request | each request |
+| `allow_auto_truncate` | per request | each request |
+| `trust_request_chat_template` | per request | each request |
 
 Scope construction, then scope each request:
 

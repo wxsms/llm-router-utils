@@ -36,6 +36,11 @@ from llm_router_utils.sglang.srt.runtime_context import (
 )
 from llm_router_utils.sglang.srt.server_args import PortArgs, ServerArgs
 
+# The parser fields whose unresolved "auto" sentinel must raise, not leak.
+from llm_router_utils.sglang.srt.managers.tokenizer_manager import (
+    _PARSER_FIELDS as _PARSER_FIELD_NAMES,
+)
+
 _SRT = (
     pathlib.Path(__file__).resolve().parents[2]
     / "src"
@@ -362,15 +367,18 @@ class TestConfigValueResolution(unittest.TestCase):
         which made ``assertNotEqual(value, "auto")`` vacuously true - a guard
         that could never fail.
 
-        ``None`` is a legitimate result (it means "no parser"); what must never
-        reach a caller is the unresolved ``"auto"`` sentinel, which makes
+        There are two acceptable outcomes for the parser fields, and each is
+        asserted rather than skipped: either ``config_value`` raises the
+        documented ``ValueError`` backstop, or it returns a real value. What must
+        never reach a caller is the unresolved ``"auto"`` sentinel, which makes
         ``ToolCallParserEnum.get("auto")`` None (tool calls accepted then
         silently dropped) and ``ReasoningParser`` raise.
         """
         keys = _config_value_keys()
         self.assertGreater(len(keys), 0, "no config_value() reads discovered")
         # Force detection to be a no-op so the sentinel survives to config_value.
-        checked = 0
+        asserted = 0
+        raised = 0
         with patch.object(
             type(self._manager()), "resolve_auto_parsers", return_value=None
         ):
@@ -385,21 +393,33 @@ class TestConfigValueResolution(unittest.TestCase):
                     try:
                         value = manager.config_value(name)
                     except ValueError:
-                        # Loud failure is the documented backstop.
-                        continue
-                    self.assertNotEqual(
-                        value,
-                        "auto",
-                        f"config_value({name!r}) leaked the unresolved sentinel",
-                    )
-                    checked += 1
+                        # The backstop for an unresolved sentinel is the
+                        # documented behaviour for the parser fields; for any
+                        # other field it would be a bug.
+                        self.assertIn(
+                            name,
+                            _PARSER_FIELD_NAMES,
+                            f"config_value({name!r}) raised but is not a parser field",
+                        )
+                        raised += 1
+                    else:
+                        self.assertNotEqual(
+                            value,
+                            "auto",
+                            f"config_value({name!r}) leaked the unresolved sentinel",
+                        )
+                        asserted += 1
         # Without this, a future change that made every field raise would leave
         # the loop asserting nothing at all and the test would still pass.
+        self.assertEqual(
+            asserted + raised,
+            len(keys),
+            "some config_value key was neither asserted nor expected to raise",
+        )
         self.assertGreater(
-            checked,
+            raised,
             0,
-            "every field hit the ValueError branch; the sentinel-leak "
-            "assertion never ran",
+            "no parser field exercised the unresolved-sentinel backstop",
         )
 
     def test_unresolved_auto_sentinel_raises_instead_of_leaking(self):
@@ -562,22 +582,55 @@ class TestMultiModelIsolation(unittest.TestCase):
     def test_request_time_scope_cannot_restore_setup_time_values(self):
         """The trap the docs previously described wrongly.
 
-        A value captured at construction is already baked into the instance, so
-        entering a scope later changes what *new* reads see, not what was stored.
+        A value captured at construction is baked into the instance, so entering
+        a scope later changes what *new* reads see, not what was stored.
+        Asserted against a real constructed object: the previous version
+        compared a dict literal to itself and could never fail.
         """
         a = self._args("A", "tool_use", "high")
         b = self._args("B", None, "low")
-        self._build(a)
+
+        # Build A under A's scope; its __init__ captures A's values.
+        with use_runtime_context(server_args=a, model_config=None):
+            self._build(a)
+            serving_a = self._make_serving(a)
+        self.assertEqual(
+            serving_a.default_chat_template_kwargs, {"reasoning_effort": "high"}
+        )
+
+        # Building B afterwards moves the process default to B.
         self._build(b)
+        self.assertEqual(
+            get_serving().default_chat_template_kwargs, {"reasoning_effort": "low"}
+        )
 
-        captured_at_setup = get_serving().default_chat_template_kwargs
-        self.assertEqual(captured_at_setup, {"reasoning_effort": "low"})
+        # A's instance still holds what it captured, with no scope open.
+        self.assertEqual(
+            serving_a.default_chat_template_kwargs,
+            {"reasoning_effort": "high"},
+            "a scope opened after construction must not retroactively change "
+            "what the instance captured",
+        )
 
-        with use_runtime_context(server_args=a):
-            # New reads do reflect the scope...
-            self.assertEqual(get_serving().hf_chat_template_name, "tool_use")
-            # ...but anything already captured is unchanged.
-            self.assertEqual(captured_at_setup, {"reasoning_effort": "low"})
+        # A request-time scope does not rewrite the captured attribute either.
+        with use_runtime_context(server_args=b):
+            self.assertEqual(
+                serving_a.default_chat_template_kwargs,
+                {"reasoning_effort": "high"},
+            )
+
+    def _make_serving(self, args):
+        """Construct a real OpenAIServingChat so setup-time capture is exercised."""
+        import llm_router_utils.sglang.srt.managers.tokenizer_manager as tmm
+        from llm_router_utils.sglang.srt.entrypoints.openai.serving_chat import (
+            OpenAIServingChat,
+        )
+        from llm_router_utils.sglang.srt.parser.template_manager import TemplateManager
+
+        with patch.object(tmm, "ModelConfig") as model_config_cls:
+            model_config_cls.return_value.image_token_id = None
+            manager = tmm.TokenizerManager(args, PortArgs())
+        return OpenAIServingChat(manager, TemplateManager())
 
 
 class TestServingConfigDefaultsCoverServerArgs(unittest.TestCase):

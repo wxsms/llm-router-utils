@@ -49,17 +49,22 @@ class ModelConfig:
         self.context_length = context_length
         self.is_embedding = is_embedding if is_embedding is not None else False
 
-        # Load HF config via upstream's get_config (byte-equivalent to sglang)
+        # Load HF config via upstream's get_config (byte-equivalent to sglang).
+        #
+        # Upstream calls get_config() unguarded, so a bad checkpoint path raises
+        # here rather than producing a ModelConfig with hf_config=None. The
+        # earlier slimming swallowed the error and cached None, which deferred
+        # the failure to the first reader -- resolve_chat_encoding_spec then did
+        # `hf_config.architectures` and raised "AttributeError: 'NoneType'..."
+        # with no mention of the model path. Fail here instead, matching
+        # upstream, so the message names the actual problem.
         from llm_router_utils.sglang.srt.utils.hf_transformers.config import get_config
-        try:
-            self.hf_config = get_config(
-                model_path,
-                trust_remote_code=trust_remote_code,
-                revision=revision,
-            )
-        except Exception as e:
-            logger.warning(f"Failed to load HF config for {model_path}: {e}")
-            self.hf_config = None
+
+        self.hf_config = get_config(
+            model_path,
+            trust_remote_code=trust_remote_code,
+            revision=revision,
+        )
 
         # Determine multimodal
         self.is_multimodal = False

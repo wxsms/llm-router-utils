@@ -60,9 +60,24 @@ def main() -> int:
         upstream = row.group(1)
 
     if upstream:
-        gm = re.search(r"branch\s*=\s*(\S+)", GITMODULES.read_text(encoding="utf-8"))
+        # Scope the match to the sglang submodule section: an unscoped
+        # ``branch =`` would silently validate whichever submodule comes first
+        # once a second one is added.
+        gitmodules_text = GITMODULES.read_text(encoding="utf-8")
+        section = re.search(
+            r'\[submodule\s+"vendor/sglang"\](.*?)(?=^\[|\Z)',
+            gitmodules_text,
+            re.MULTILINE | re.DOTALL,
+        )
+        gm = (
+            re.search(r"^\s*branch\s*=\s*(\S+)", section.group(1), re.MULTILINE)
+            if section
+            else None
+        )
         if not gm:
-            problems.append(".gitmodules: no submodule branch pinned")
+            problems.append(
+                '.gitmodules: vendor/sglang section has no branch pinned'
+            )
         elif gm.group(1) != f"release/{upstream}":
             problems.append(
                 f".gitmodules pins {gm.group(1)!r} but README maps v{declared} "

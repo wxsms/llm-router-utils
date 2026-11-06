@@ -56,8 +56,10 @@ jobs:
           python -c "import tml_renderers; print('tml-renderers import ok')"
 
       # A bare "no skips" assertion is not enough: "no tests ran", "8 deselected"
-      # and "5 passed, 2 xfailed" all contain no "skipped" and would pass green.
-      # Assert the exact pass count so a renamed or emptied test file fails here.
+      # and "5 passed, 2 xfailed" all lack the word "skipped" and would pass
+      # green. Assert a pass-count *floor* instead: a renamed or emptied test
+      # file drops below it and fails, while adding a test still passes. (An
+      # exact count would break CI for anyone who adds a test here.)
       - name: DeepSeek-V4.1 tests must run, not skip
         run: |
           set -o pipefail
@@ -68,8 +70,9 @@ jobs:
             echo "::error::deepseekv41 tests did not all run - deepseek-recipe not usable"
             exit 1
           fi
-          if ! grep -qE '^8 passed' /tmp/dsv41.txt; then
-            echo "::error::expected exactly 8 passed in the deepseekv41 suite"
+          passed=$(sed -nE 's/^([0-9]+) passed.*/\1/p' /tmp/dsv41.txt | head -1)
+          if [ -z "${passed}" ] || [ "${passed}" -lt 8 ]; then
+            echo "::error::expected at least 8 passed, got '${passed:-none}'"
             cat /tmp/dsv41.txt
             exit 1
           fi
@@ -83,8 +86,9 @@ jobs:
             echo "::error::inkling tests did not all run - tml-renderers not usable"
             exit 1
           fi
-          if ! grep -qE '^14 passed' /tmp/inkling.txt; then
-            echo "::error::expected exactly 14 passed in the inkling suite"
+          passed=$(sed -nE 's/^([0-9]+) passed.*/\1/p' /tmp/inkling.txt | head -1)
+          if [ -z "${passed}" ] || [ "${passed}" -lt 14 ]; then
+            echo "::error::expected at least 14 passed, got '${passed:-none}'"
             cat /tmp/inkling.txt
             exit 1
           fi

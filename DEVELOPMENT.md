@@ -403,6 +403,18 @@ upstream wholesale on later upgrades.
 | `srt/arg_groups/` | CLI/env/model-override resolution machinery | resolution stash (`declare_resolution` / `resolution_result`) + read-only resolving view |
 | `srt/sampling/sampling_params.py` | full `SamplingParams` struct + watermark validation (torch) | the two private request-transport helpers `serving_chat` uses |
 
+Two branches inside these shims are **inert by construction** — do not mistake
+them for working features when reviewing a future upgrade:
+
+| Inert branch | Why |
+|---|---|
+| `_architecture_parser_defaults` (`template_detection.py`) | early-returns `{}` because nothing ever attaches `ServerArgs._model_config`; no `src/` code assigns it |
+| `muse_spark_chat_template_default` (`arg_groups/muse_spark_hook.py`) | hard-coded `return None`; upstream derives `--chat-template` from the checkpoint during launch, which this repo does not do |
+
+Architecture-derived parser defaults and Muse Spark template defaulting are
+therefore unsupported. If a future version needs them, the shim has to grow a
+real `_model_config` attachment first — not just delete the early return.
+
 `managers/tokenizer_manager.py` gained a `config_value()` method returning the
 *resolved* value — it consults the declaration stash via `resolution_result`, not
 just the raw `ServerArgs` field. Reading the raw field silently returned `"auto"`
