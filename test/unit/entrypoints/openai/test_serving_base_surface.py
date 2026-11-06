@@ -17,6 +17,7 @@ Extraction-inherent attributes are excluded explicitly, with a reason each.
 import ast
 import pathlib
 import unittest
+from types import SimpleNamespace
 
 from llm_router_utils.sglang.srt.entrypoints.openai.serving_base import (
     OpenAIServingBase,
@@ -150,6 +151,165 @@ class TestServingBaseSurface(unittest.TestCase):
 
         source = inspect.getsource(OpenAIServingBase.__init__)
         self.assertIn("self.tokenizer_manager = tokenizer_manager", source)
+
+
+class TestLoraHelpersBehaviour(unittest.TestCase):
+    """Behavioural parity for the LoRA helpers, transcribed from upstream.
+
+    A presence-only guard (`hasattr`) previously certified a broken
+    implementation: `_resolve_lora_path` had its parameters reversed and used a
+    different algorithm, yet every test still passed. These cases pin the
+    *results* so that class of defect cannot recur.
+    """
+
+    SERVED = "my-model"
+
+    def _serving(self, served=SERVED):
+        base = OpenAIServingBase.__new__(OpenAIServingBase)
+        base.tokenizer_manager = SimpleNamespace(served_model_name=served)
+        return base
+
+    def test_parse_model_parameter(self):
+        s = self._serving()
+        cases = [
+            ("my-model", ("my-model", None)),
+            ("other-model", ("other-model", None)),
+            ("my-model:adapter", ("my-model", "adapter")),
+            ("my-model:", ("my-model", None)),
+            ("other:adapter", ("other", "adapter")),
+            ("a:b:c", ("a", "b:c")),
+            ("  sp : ad  ", ("sp", "ad")),
+        ]
+        for model, expected in cases:
+            with self.subTest(model=model):
+                self.assertEqual(s._parse_model_parameter(model), expected)
+
+    def test_parse_preserves_a_served_name_containing_colons(self):
+        """An object-storage URI must not be split at its scheme colon."""
+        s = self._serving("s3://bucket/model")
+        self.assertEqual(
+            s._parse_model_parameter("s3://bucket/model"), ("s3://bucket/model", None)
+        )
+        self.assertEqual(
+            s._parse_model_parameter("s3://bucket/model:adapter"),
+            ("s3://bucket/model", "adapter"),
+        )
+
+    def test_resolve_lora_path_argument_order(self):
+        """Signature is (request_model, explicit_lora_path) -- upstream's order.
+
+        A reversed signature silently returned the served model name as the
+        adapter for every plain request.
+        """
+        import inspect
+
+        params = list(inspect.signature(OpenAIServingBase._resolve_lora_path).parameters)
+        self.assertEqual(params, ["self", "request_model", "explicit_lora_path"])
+
+    def test_resolve_lora_path_precedence(self):
+        s = self._serving()
+        # Plain request: explicit path passes through untouched.
+        self.assertIsNone(s._resolve_lora_path("my-model", None))
+        self.assertEqual(s._resolve_lora_path("my-model", "explicit"), "explicit")
+        # Model-embedded adapter wins over the explicit path.
+        self.assertEqual(
+            s._resolve_lora_path("my-model:from-model", "explicit"), "from-model"
+        )
+        # A plain served name must NOT be mistaken for an adapter.
+        self.assertEqual(s._resolve_lora_path("other-model", None), None)
+
+    def test_resolve_lora_path_supports_batches(self):
+        s = self._serving()
+        batch = ["a", None]
+        self.assertEqual(s._resolve_lora_path("my-model", batch), batch)
+        self.assertEqual(s._resolve_lora_path("my-model:x", batch), "x")
+
+
+class TestHeaderExtractorsBehaviour(unittest.TestCase):
+    """Behavioural parity for the header extractors.
+
+    Each was previously certified only by ``hasattr``; making one of them
+    ``return None`` unconditionally left the whole suite green.
+    """
+
+    def _serving(self, **attrs):
+        """Build an instance with the ``__init__``-set attributes populated."""
+        base = OpenAIServingBase.__new__(OpenAIServingBase)
+        base.allowed_custom_labels = None
+        base._custom_labels_header = "x-custom-labels"
+        for k, v in attrs.items():
+            setattr(base, k, v)
+        return base
+
+    @staticmethod
+    def _req(headers):
+        return SimpleNamespace(headers=headers)
+
+    def test_extract_routing_key(self):
+        s = self._serving()
+        self.assertEqual(
+            s.extract_routing_key(self._req({"x-smg-routing-key": "k1"})), "k1"
+        )
+        self.assertIsNone(s.extract_routing_key(self._req({})))
+        self.assertIsNone(s.extract_routing_key(None))
+
+    def test_extract_routed_dp_rank_from_header(self):
+        s = self._serving()
+        # Header wins over the body value.
+        self.assertEqual(
+            s.extract_routed_dp_rank_from_header(
+                self._req({"x-data-parallel-rank": "3"}), body_routed_dp_rank=1
+            ),
+            3,
+        )
+        # No header -> body value passes through.
+        self.assertEqual(
+            s.extract_routed_dp_rank_from_header(self._req({}), body_routed_dp_rank=7),
+            7,
+        )
+        self.assertIsNone(s.extract_routed_dp_rank_from_header(None, None))
+
+    def test_extract_routed_dp_rank_rejects_non_integer(self):
+        from fastapi import HTTPException
+
+        s = self._serving()
+        with self.assertRaises(HTTPException):
+            s.extract_routed_dp_rank_from_header(
+                self._req({"x-data-parallel-rank": "not-an-int"})
+            )
+
+    def test_extract_custom_labels_is_off_by_default(self):
+        """No allow-list configured -> never echo labels back."""
+        s = self._serving()
+        self.assertIsNone(
+            s.extract_custom_labels(self._req({"x-custom-labels": '{"a": "b"}'}))
+        )
+
+    def test_extract_custom_labels_filters_to_the_allow_list(self):
+        s = self._serving(allowed_custom_labels=["keep"])
+        got = s.extract_custom_labels(
+            self._req({"x-custom-labels": '{"keep": "1", "drop": "2"}'})
+        )
+        self.assertEqual(got, {"keep": "1"})
+
+    def test_create_error_response_shape(self):
+        s = self._serving()
+        resp = s.create_error_response("boom", status_code=422)
+        self.assertEqual(resp.status_code, 422)
+        import json
+
+        body = json.loads(resp.body)
+        self.assertEqual(body["object"], "error")
+        self.assertEqual(body["message"], "boom")
+        self.assertEqual(body["code"], 422)
+
+    def test_create_streaming_error_response_shape(self):
+        import json
+
+        s = self._serving()
+        payload = json.loads(s.create_streaming_error_response("boom"))
+        self.assertIn("error", payload)
+        self.assertEqual(payload["error"]["message"], "boom")
 
 
 if __name__ == "__main__":

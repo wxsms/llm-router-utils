@@ -362,19 +362,54 @@ _EXPECTED_PATTERNS = [
 # compare the line with the prefix stripped instead of substring-testing.
 _RETAINED_PREFIX_RE = re.compile(r"^(?P<lead>\s*(?:from|import)\s+)llm_router_utils\.sglang\.")
 
+#: Documented module renames this repo applies on top of the prefix map
+#: (DEVELOPMENT.md rule 5: ``hf_transformers_utils`` -> ``hf_transformers``).
+#: Applied to the upstream-side line before comparison so the sanctioned rename
+#: is not mistaken for drift by the stricter equivalence test below.
+_DOCUMENTED_MODULE_RENAMES = (
+    ("srt.utils.hf_transformers_utils", "srt.utils.hf_transformers"),
+)
 
-def _is_sanctioned_import_line(line: str) -> bool:
-    """True when the line is an import that differs only by the prefix map."""
+
+def _apply_documented_renames(line: str) -> str:
+    for old, new in _DOCUMENTED_MODULE_RENAMES:
+        line = line.replace(old, new)
+    return line
+
+
+def _is_sanctioned_import_line(line: str, counterpart: str | None) -> bool:
+    """True only when ``line`` is the prefix-mapped twin of ``counterpart``.
+
+    ``normalize()`` applies the import rewrite to BOTH sides, so after
+    normalization the sanctioned transformation has already been undone: a
+    surviving import line is real divergence, not a prefix artefact. An earlier
+    version tested "does this line contain ``llm_router_utils.sglang.``", which
+    is true of *both* sides of every changed import -- so a changed symbol, a
+    changed target module, or a changed arity all came back ``expected``.
+
+    The correct test is structural: take the one other changed line in the hunk
+    (``counterpart``), strip the retained prefix from this line, and require the
+    two to be identical. If they are, the pair differs only by the sanctioned
+    prefix map. Otherwise the hunk is genuine drift.
+    """
+    if counterpart is None:
+        return False
     stripped = line.strip()
     if not (stripped.startswith("from ") or stripped.startswith("import ")):
         return False
     m = _RETAINED_PREFIX_RE.match(line)
     if not m:
         return False
-    # The same line with the prefix removed must look like a plausible upstream
-    # import, i.e. the only transformation applied was the documented one.
-    upstream_equivalent = m.group("lead") + "sglang." + line[m.end():]
-    return upstream_equivalent.strip() != ""
+    mapped = m.group("lead") + "sglang." + line[m.end() :]
+    # The counterpart may itself still carry the retained prefix (both sides are
+    # rewritten), so compare after removing it from whichever side has it, and
+    # after applying the documented module renames to both sides.
+    other = _RETAINED_PREFIX_RE.sub(
+        lambda mm: mm.group("lead") + "sglang.", counterpart
+    )
+    return _apply_documented_renames(mapped).strip() == _apply_documented_renames(
+        other
+    ).strip()
 
 
 def _classify_hunk(diff_lines: list[str]) -> str:
@@ -393,10 +428,21 @@ def _classify_hunk(diff_lines: list[str]) -> str:
     changed = added + removed
     if not changed:
         return "expected"
-    if all(
-        any(p.search(l) for p in _EXPECTED_PATTERNS) or _is_sanctioned_import_line(l)
-        for l in changed
-    ):
+
+    def _all_expected() -> bool:
+        for line in changed:
+            if any(p.search(line) for p in _EXPECTED_PATTERNS):
+                continue
+            # An import line survives normalization only if it genuinely
+            # differs. Accept it solely when it is the prefix-mapped twin of
+            # the one other changed line in the hunk.
+            others = [o for o in changed if o is not line]
+            if len(others) == 1 and _is_sanctioned_import_line(line, others[0]):
+                continue
+            return False
+        return True
+
+    if _all_expected():
         return "expected"
     # Pure deletion (no substantive added lines) = sanctioned slimming.
     substantive_added = [l for l in added if l.strip() != ""]
