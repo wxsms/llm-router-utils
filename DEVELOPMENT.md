@@ -186,6 +186,8 @@ make check-license                          # 4. Apache 2.0 §4 attribution
 
 All tests must pass. If upstream changed an implementation (e.g. the inkling_detector rewrite), the corresponding tests must be synced to the new upstream version.
 
+Passing tests are necessary but **not** sufficient: a green suite is also what a vacuous guard produces. For every guard test added this upgrade, revert the fix in a scratch worktree and confirm the guard fails — see [Guard Tests Must Be Mutation-Verified](#guard-tests-must-be-mutation-verified).
+
 ### Torch-import check
 
 ```bash
@@ -326,6 +328,7 @@ python -c "import urllib.request, json; d=json.load(urllib.request.urlopen('http
 ### Release checklist
 
 - [ ] All four checks pass (pytest, check-torch, check-parity, check-license)
+- [ ] Every guard test added this upgrade has a recorded reversion proof (see [Guard Tests Must Be Mutation-Verified](#guard-tests-must-be-mutation-verified))
 - [ ] Dependency pins in `pyproject.toml` match the tracked upstream release (Step 3.5)
 - [ ] `pyproject.toml` and `_version.py` bumped to the same version
 - [ ] `PYTHONPATH=src python -c "from llm_router_utils import __version__"` prints the new version
@@ -350,6 +353,76 @@ python -c "import urllib.request, json; d=json.load(urllib.request.urlopen('http
 - **Do not leave a test at the old version when the code under test changed**: a stale test plus a `skipUnless` guard is the worst combination — it looks protected, passes green everywhere the extension is absent, and silently drops the golden-reference assertions where it is present. Compare method sets against upstream (`python - <<` an AST diff) after every sync.
 - **Upstream test fixtures that assume `msgspec.Struct`**: this repo's `ServerArgs` is a plain dataclass, so `msgspec.Struct.__setattr__(args, ...)` must become `object.__setattr__(args, ...)` when syncing a test.
 - **JSON/`.jinja` fixtures copied via PowerShell**: `>` and `Out-File` emit UTF-16/BOM, which breaks `json.loads` and jinja reads with a `UnicodeDecodeError`. Always re-encode as UTF-8 without BOM (`[System.IO.File]::WriteAllText(path, text, (New-Object System.Text.UTF8Encoding($false)))`) and diff against the upstream fixture to confirm.
+
+## Guard Tests Must Be Mutation-Verified
+
+**A guard that has never been seen to fail is not a guard — it is a comment that
+runs.** Every test added to protect an upgrade must ship with a proof that it
+fails when the thing it protects is reverted. Without that proof the test's green
+result carries no information, and a green suite is exactly where a real
+regression hides.
+
+This is not a theoretical caution. On the v0.9.0 upgrade alone, four separate
+guards were written, reviewed, reported as passing, and turned out to assert
+nothing:
+
+| Guard | What it actually asserted | What it caught |
+|---|---|---|
+| `test_io_struct_surface.py` with `parents[4]` | `[] == []` — the scan root did not exist | nothing; a deleted `GenerateReqInput` field still passed |
+| `_resolve_lora_path` guard via `hasattr` | that the method existed | **certified a reversed parameter order as correct** |
+| `use_runtime_context` `_UNSET` test | nothing observable | all 32 tests stayed green with the fix reverted |
+| `extract_custom_labels` test | an attribute set by hand in the test | a state no caller could ever produce |
+
+The common thread is that each one asserted a *shape* (the name exists, the call
+returns, the list is empty) rather than a *behaviour* that changes when the code
+changes. **Assert the observable consequence, not the presence of the symbol.**
+
+### The procedure
+
+Revert only the fix, keep every test, and confirm the guard fails:
+
+```bash
+git worktree add C:\Temp\mut verify-shares-target    # never on the main checkout
+# in the worktree: undo the src/ fix, leave the test untouched
+cd C:\Temp\mut && PYTHONPATH=src python -m pytest <the guard> -q
+```
+
+It must fail, and for the **right reason** — read the assertion message, do not
+just check the exit code. A guard that fails because of a syntax error or a bad
+import path proves nothing.
+
+Two things to watch on Windows:
+
+- **Absolute paths only.** `[System.IO.File]::WriteAllText("relative/path", ...)`
+  resolves against the .NET process directory, not the shell's cwd. A reviewer
+  destroyed uncommitted work this way. Write scratch files to `C:\Temp` and always
+  pass a fully absolute path.
+- **The submodule does not come along.** A worktree has an empty `vendor/sglang`,
+  so `check-parity` aborts with "upstream root not found". Junction the real one
+  in: `cmd /c mklink /J C:\Temp\mut\vendor\sglang <repo>\vendor\sglang`.
+
+### Guards must also fail safely
+
+Verifying the guard is necessary but not sufficient — it must also not become
+vacuous later. Prefer a guard that breaks loudly over one that degrades to
+nothing:
+
+- Assert the scan root **exists** and yields **something** before asserting
+  anything about its contents (`test_retained_tree_resolves`,
+  `test_the_scan_has_call_sites_to_scan` in `test_io_struct_surface.py`).
+- Set a **floor** on how many items the scan must find, not an exact count, so
+  adding a call site does not break CI but a path regression does.
+- When a floor genuinely cannot apply — `EmbeddingReqInput` has zero construction
+  sites today — omit that target rather than lowering the floor for all of them.
+
+### What counts as a behaviour assertion
+
+| Weak | Strong |
+|---|---|
+| `hasattr(cls, "extract_custom_labels")` | call it through the real `__init__` path with a header present, assert the labels come back |
+| `assertEqual(missing, [])` where `missing` is computed from a path that may not exist | assert the input set is non-empty first |
+| test sets `obj.allowed_custom_labels = [...]` by hand | drive the value from `ServerArgs` / the request, as a consumer would |
+| asserting a function returns non-`None` | asserting the 180-case differential against upstream matches |
 
 ## Shim Fidelity
 
