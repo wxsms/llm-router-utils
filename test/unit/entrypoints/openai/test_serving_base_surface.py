@@ -286,11 +286,35 @@ class TestHeaderExtractorsBehaviour(unittest.TestCase):
         )
 
     def test_extract_custom_labels_filters_to_the_allow_list(self):
-        s = self._serving(allowed_custom_labels=["keep"])
+        """Reachable via ServerArgs, not a hand-set attribute.
+
+        The earlier version assigned ``allowed_custom_labels`` directly -- a
+        state no caller could produce while ``__init__`` hard-coded None.
+        """
+        from llm_router_utils.sglang.srt.server_args import ServerArgs
+
+        sa = ServerArgs(
+            model_path="m", tokenizer_metrics_allowed_custom_labels=["keep"]
+        )
+        s = OpenAIServingBase(SimpleNamespace(server_args=sa))
         got = s.extract_custom_labels(
             self._req({"x-custom-labels": '{"keep": "1", "drop": "2"}'})
         )
         self.assertEqual(got, {"keep": "1"})
+
+    def test_extract_custom_labels_reads_the_configured_header(self):
+        from llm_router_utils.sglang.srt.server_args import ServerArgs
+
+        sa = ServerArgs(
+            model_path="m",
+            tokenizer_metrics_allowed_custom_labels=["keep"],
+            tokenizer_metrics_custom_labels_header="x-my-labels",
+        )
+        s = OpenAIServingBase(SimpleNamespace(server_args=sa))
+        self.assertEqual(
+            s.extract_custom_labels(self._req({"x-my-labels": '{"keep": "1"}'})),
+            {"keep": "1"},
+        )
 
     def test_create_error_response_shape(self):
         s = self._serving()

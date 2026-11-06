@@ -516,6 +516,33 @@ class TestRuntimeContextScoping(unittest.TestCase):
         # restored to the process default afterwards
         self.assertIsNone(get_serving().hf_chat_template_name)
 
+    def test_scope_inherits_the_slot_it_does_not_name(self):
+        """Omitting ``model_config`` must inherit it, not blank it.
+
+        The docstring promises the same "omitted means unchanged" contract as
+        ``set_runtime_context``. Reverting to ``None`` defaults leaves the whole
+        suite green while making ``get_model()`` fail closed inside the scope.
+        """
+        import llm_router_utils.sglang.srt.managers.tokenizer_manager as tmm
+
+        with patch.object(tmm, "ModelConfig") as model_config_cls:
+            model_config_cls.return_value.image_token_id = None
+            model_config_cls.return_value.revision = "REV-A"
+            tmm.TokenizerManager(
+                ServerArgs(model_path="A", skip_tokenizer_init=True), PortArgs()
+            )
+
+        self.assertEqual(get_model().revision, "REV-A")
+
+        # Only server_args named -> model_config must survive from the default.
+        with use_runtime_context(server_args=ServerArgs(model_path="B")):
+            self.assertEqual(
+                get_model().revision,
+                "REV-A",
+                "use_runtime_context(server_args=...) blanked model_config; "
+                "get_model() now fails closed instead of inheriting",
+            )
+
 
 class TestMultiModelIsolation(unittest.TestCase):
     """C1: a multi-model router must not serve A with B's setup-time config.

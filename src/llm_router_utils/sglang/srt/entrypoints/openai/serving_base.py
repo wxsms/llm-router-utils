@@ -49,20 +49,35 @@ class OpenAIServingBase:
 
     def __init__(self, tokenizer_manager: "TokenizerManager"):
         self.tokenizer_manager = tokenizer_manager
-        # Upstream reads these from the published observability namespace and
-        # only when ``server_args`` is a real ServerArgs instance.
-        self.allowed_custom_labels: Optional[List[str]] = None
-        self._custom_labels_header = _DEFAULT_CUSTOM_LABELS_HEADER
+        # Upstream reads these from the published observability namespace; the
+        # slimmed ServerArgs carries them directly so the feature is reachable.
+        server_args = getattr(tokenizer_manager, "server_args", None)
+        allowed = getattr(
+            server_args, "tokenizer_metrics_allowed_custom_labels", None
+        )
+        self.allowed_custom_labels: Optional[List[str]] = (
+            set(allowed) if allowed else None
+        )
+        self._custom_labels_header = getattr(
+            server_args,
+            "tokenizer_metrics_custom_labels_header",
+            _DEFAULT_CUSTOM_LABELS_HEADER,
+        )
 
     # -- request ids -------------------------------------------------------
     def _request_id_prefix(self) -> str:
-        """Override point; upstream subclasses customise this."""
-        return ""
+        """Generate request ID based on request type"""
+        pass
 
     def _generate_request_id_base(self, request: OpenAIServingRequest) -> Optional[str]:
-        """Return a request id if the request did not supply one."""
-        if getattr(request, "rid", None):
-            return None
+        """Generate request ID based on request type"""
+        return None
+
+        # TODO(chang): the rid is used in io_strcut check and often violates `The rid should be a list` AssertionError
+        # Temporarily return None in this function until the rid logic is clear.
+        if rid := getattr(request, "rid", None):
+            return rid
+
         return f"{self._request_id_prefix()}{uuid.uuid4().hex}"
 
     # -- model / LoRA ------------------------------------------------------
