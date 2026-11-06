@@ -17,8 +17,6 @@ managers/io_struct.py
 managers/tokenizer_manager.py
 mem_cache/utils.py
 observability/metrics_collector.py
-parser/template_detection.py
-parser/template_manager.py
 runtime_context.py
 sampling/sampling_params.py
 server_args.py
@@ -27,6 +25,5 @@ utils/common.py
 utils/hf_transformers/__init__.py
 utils/hf_transformers/common.py
 utils/hf_transformers/config.py
-utils/hf_transformers/tokenizer.py
 utils/hf_transformers_patches.py
 utils/runai_utils.py

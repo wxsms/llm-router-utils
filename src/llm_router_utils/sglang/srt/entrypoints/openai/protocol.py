@@ -11,7 +11,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-# ==============================================================================
 # Derivative work: slimmed for llm-router-utils. See DEVELOPMENT.md.
 # Original copyright notice retained per Apache 2.0 §4(b)/§4(c).
 # ==============================================================================
@@ -621,9 +620,24 @@ class ChatCompletionMessageContentImageURL(BaseModel):
     @field_validator("content_hash")
     @classmethod
     def validate_content_hash(cls, value: Optional[str]) -> Optional[str]:
-        from llm_router_utils.sglang.srt.multimodal.cache import parse_content_hash
-
-        return parse_content_hash(value)
+        # Inlined from sglang.srt.multimodal.cache.identity.parse_content_hash
+        # (this repo does not retain the multimodal processing layer, so that
+        # import would raise ModuleNotFoundError at validation time). The body
+        # and both constants now match upstream exactly: CONTENT_HASH_PREFIX is
+        # "sha256:" and _SHA256_HEX_LENGTH is 64.
+        if value is None:
+            return None
+        prefix = "sha256:"
+        if not isinstance(value, str) or not value.startswith(prefix):
+            raise ValueError("content_hash must use the form 'sha256:<64 hex digits>'")
+        digest = value[len(prefix) :]
+        if len(digest) != 64:
+            raise ValueError("content_hash must contain exactly 64 SHA-256 hex digits")
+        try:
+            bytes.fromhex(digest)
+        except ValueError as exc:
+            raise ValueError("content_hash contains non-hexadecimal characters") from exc
+        return prefix + digest.lower()
 
 
 class ChatCompletionMessageContentVideoURL(BaseModel):

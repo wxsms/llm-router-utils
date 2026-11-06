@@ -402,6 +402,16 @@ upstream wholesale on later upgrades.
 | `srt/runtime_context.py` | ~2,200-line process-wide config publication layer (arg-group namespaces, role-scoped reads) | `get_serving()` / `get_model()` read-only proxies over `ServerArgs` / `ModelConfig` |
 | `srt/arg_groups/` | CLI/env/model-override resolution machinery | resolution stash (`declare_resolution` / `resolution_result`) + read-only resolving view |
 | `srt/sampling/sampling_params.py` | full `SamplingParams` struct + watermark validation (torch) | the two private request-transport helpers `serving_chat` uses |
+| `srt/entrypoints/openai/serving_base.py` | 300-line ABC owning HTTP handling **and** the helper surface `serving_chat` calls | `handle_request` and the two `_handle_*_request` dispatchers dropped; every non-HTTP helper kept (`create_error_response`, `create_streaming_error_response`, `_parse_model_parameter`, `_resolve_lora_path`, `extract_custom_labels`, `extract_routing_key`, `extract_routed_dp_rank_from_header`, `_request_id_prefix`, `_generate_request_id_base`) |
+
+**`serving_base.py` must stay wide enough for `serving_chat.py`.** Because
+`serving_chat.py` is upstream-identical, it calls the upstream base API; a
+narrower base class raises `AttributeError` at runtime while every test that
+only exercises `_process_messages` still passes. This actually happened. The
+guard is `test/unit/entrypoints/openai/test_serving_base_surface.py`, which
+AST-walks every `self.<name>` read in `serving_chat.py` and asserts it resolves
+on the base class — extend its exclusion set only for genuine instance
+attributes, never to silence a missing method.
 
 Two branches inside these shims are **inert by construction** — do not mistake
 them for working features when reviewing a future upgrade:

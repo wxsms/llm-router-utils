@@ -263,11 +263,50 @@ def _normalize_whitespace(text: str) -> str:
     return "\n".join(out) + "\n"
 
 
+def _strip_derivative_notice(text: str) -> str:
+    """Drop the Apache 2.0 §4(b) "Derivative work" notice block.
+
+    Rule 6 requires slimmed files to carry a notice between the upstream header
+    and the docstring. That notice is the only difference for some otherwise
+    fully-retained files, and without stripping it here a header-only edit is
+    classified as a *logic* hunk -- which is how ``parser/template_manager.py``
+    ended up on the parity baseline despite matching upstream exactly.
+
+    The block is a run of ``# ====`` separators wrapping the two notice lines,
+    so dropping the notice lines alone would leave the separators behind and
+    still register as drift. Removing any ``# ====`` line that is *not* part of
+    the upstream header is enough: the header's own closing separator is kept on
+    both sides, so parity is preserved either way.
+    """
+    out: list[str] = []
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith("# Derivative work:"):
+            continue
+        if stripped.startswith("# Original copyright notice retained per"):
+            continue
+        out.append(line)
+
+    # Collapse the now-duplicated separators that flanked the notice. Two or
+    # more consecutive identical "# ====" lines become one.
+    collapsed: list[str] = []
+    for line in out:
+        if (
+            collapsed
+            and line.strip().startswith("# =")
+            and collapsed[-1].strip() == line.strip()
+        ):
+            continue
+        collapsed.append(line)
+    return "".join(collapsed)
+
+
 def normalize(text: str) -> str:
     """Apply all normalization rules to a file's text."""
     text = _rewrite_imports(text)
     text = _drop_cuda_coredump(text)
     text = _strip_any_from_typing(text)
+    text = _strip_derivative_notice(text)
     lines = text.splitlines(keepends=True)
     lines = _collapse_xgrammar_guard(lines)
     text = "".join(lines)

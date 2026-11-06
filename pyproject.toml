@@ -30,6 +30,10 @@ dependencies = [
   "typing_extensions",
   "tiktoken",
   "transformers==5.19.0",
+  # Imported directly by utils/hf_transformers/tokenizer.py (raw tokenizer
+  # wrapper). Upstream pins it; declaring it removes reliance on transformers'
+  # transitive requirement (DEVELOPMENT.md Step 3.5).
+  "tokenizers==0.23.2",
   "openai==2.8.0",
   "mistral_common>=1.11.5",
   "packaging",
