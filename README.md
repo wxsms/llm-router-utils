@@ -52,8 +52,11 @@ Migrated modules under `llm_router_utils/sglang/srt/` (paths preserved from upst
 | Module | Description |
 |---|---|
 | `parser/` | Conversation templates (~50 model families), `ReasoningParser` + detectors, harmony/inkling, jinja utils, template detection, `TemplateManager` with `TokenizerLike` Protocol |
-| `function_call/` | `FunctionCallParser` + 34 detectors (hermes, glm, deepseek, qwen, kimi, mistral, muse-glimmer, …), `JsonArrayParser`, schema utils |
-| `entrypoints/openai/` | `protocol.py` (~1900 lines, full OpenAI types), slimmed `serving_chat.py` (only `_process_messages` chain), `serving_base.py`, `chat_encoding.py`, `encoding_dsv32/dsv4.py`, `sse_utils.py`, `usage_processor.py`, `utils.py` |
+| `function_call/` | `FunctionCallParser` + 44 detectors (hermes, glm, deepseek, qwen, kimi, mistral, muse-glimmer, …), `JsonArrayParser`, schema utils |
+| `entrypoints/openai/` | `protocol.py` (full OpenAI types), `serving_chat.py` (identical to upstream apart from import rewriting), `serving_base.py` (slimmed: HTTP entry points dropped, but the full helper surface `serving_chat.py` calls is retained), `chat_encoding.py` + `chat_encoding_adapters.py`, `encoding_dsv32.py`, `serving_deepseek_recipe.py`, `serving_inkling.py`, `parallel_prompt_encode.py`, `sse_utils.py`, `usage_processor.py`, `utils.py` |
+| `parser/chat_parsing/` | Response-template parsers (`response_parser.py`, `content_parsers.py`, `response_templates.py`) backing the template tool-call/reasoning detectors |
+| `parser/response_template.py` | `ResponseTemplate*Detector` family plus response-template request configuration and grammar helpers |
+| `function_call/response_template_structural_tag.py` | Structural tags derived from a chat template's own framing; used by `beam_detector.py` |
 | `managers/` | Slimmed `TokenizerManager` (uses upstream `get_tokenizer` for byte-parity incl. `SGLANG_PATCH_TOKENIZER`), slimmed `io_struct.py`, `embed_types.py` stub |
 | `configs/` | Slimmed `ModelConfig` (uses upstream `get_config`; exposes `hf_config`/`is_multimodal`/`get_default_sampling_params`/`context_length`), `model_config_parser_registry.py` |
 | `tokenizer/` | `tiktoken_tokenizer.py` |
@@ -83,8 +86,117 @@ The mapping between this repo's releases and upstream sglang versions, so users 
 | `v0.7.0` | [v0.5.21](https://github.com/sgl-project/sglang/tree/release/v0.5.21) |
 | `v0.8.0` | [v0.5.22](https://github.com/sgl-project/sglang/tree/release/v0.5.22) |
 | `v0.8.1` | [v0.5.22](https://github.com/sgl-project/sglang/tree/release/v0.5.22) |
+| `v0.9.0` | [v0.5.23](https://github.com/sgl-project/sglang/tree/release/v0.5.23) |
 
 > See [DEVELOPMENT.md](DEVELOPMENT.md) for the development workflow (upgrades, checks, releases).
+
+### Platform note (since `v0.9.0`)
+
+sglang v0.5.23 moved two capabilities out of its own tree into compiled
+platform-specific extensions:
+
+| Capability | Package | Wheels |
+|---|---|---|
+| DeepSeek-V4 / V4.1 prompt encoding | `deepseek-recipe==0.2.0` | Linux (x86_64, aarch64), macOS |
+| Inkling rendering | `tml-renderers` (`inkling` extra) | Linux (x86_64, aarch64), macOS arm64 |
+
+Neither publishes a Windows wheel, and upstream pins both with matching
+platform markers. This package mirrors those markers, so on Windows these
+extensions are simply not installed and the affected encoders raise an
+`ImportError` naming the missing package.
+
+**Everything else is unaffected.** Both encoders are selected per model and
+imported lazily, so a service that serves any other model family — Llama, Qwen,
+GLM, Kimi, Hermes, Mistral, and so on — never touches either package and behaves
+exactly as before on every platform.
+
+#### When `dsv4` / `dsv41` is affected
+
+The DeepSeek-V4/V4.1 path is selected by exactly two things
+(`chat_encoding.resolve_chat_encoding_spec`): the model architecture, or an
+explicit parser flag.
+
+| Trigger | Example |
+|---|---|
+| The model architecture | `DeepseekV4ForCausalLM`, `DeepseekV41ForCausalLM` |
+| An explicit parser flag | `--tool-call-parser deepseekv4` / `deepseekv41` |
+
+| Model / setting | Encoding spec | Needs `deepseek-recipe` |
+|---|---|---|
+| `LlamaForCausalLM`, `Qwen2ForCausalLM`, `DeepseekV3ForCausalLM`, … | `None` | no |
+| `DeepseekV4ForCausalLM` | `dsv4` | yes |
+| `DeepseekV41ForCausalLM` | `dsv41` | yes |
+
+`deepseekv32` is **not** affected — DeepSeek-V3.2 still renders through the
+in-tree `encoding_dsv32.py`.
+
+So: **only serving a DeepSeek-V4/V4.1 checkpoint, or explicitly selecting that
+parser, is unavailable on Windows.** Everything else works normally.
+
+Two caveats on the `ImportError`:
+
+- For `dsv4`/`dsv41`, a checkpoint whose tokenizer has no `tokenizer.json` fails
+  earlier with `ValueError: deepseek-recipe needs the checkpoint's fast
+  tokenizer`, because the tokenizer check precedes the package import. Use a
+  fast-tokenizer checkpoint to see the missing-package message.
+- `tml-renderers` publishes `cp311-abi3` wheels only and ships no sdist, so the
+  `inkling` extra requires **Python >= 3.11** even though the base package
+  supports 3.10.
+
+Relative to `v0.8.x`, which shipped in-tree `dsv4`/`dsv41` encoders, this is a
+capability removal **scoped to those two architectures on Windows**; it follows
+upstream sglang v0.5.23. The `encoding_dsv4.py`/`encoding_dsv41.py` module paths
+no longer exist on any platform.
+
+### Serving several models from one process
+
+Each `TokenizerManager` registers its config as a **process-level default**, so
+the one constructed last wins. Single-model services are unaffected. A router
+that builds more than one manager must scope **both** construction and request
+handling, because the two groups read the global at different times:
+
+| Field | When it is read | Scope needed |
+|---|---|---|
+| `hf_chat_template_name` | template initialisation | construction |
+| `default_chat_template_kwargs` | `OpenAIServingChat.__init__` | construction |
+| encoding adapter's `revision` | `OpenAIServingChat.__init__` | construction |
+| `enable_cache_report` | per request | each request |
+| `incremental_streaming_output` | per request | each request |
+| `return_input_ids` / `return_output_ids` | per request | each request |
+| `stream_response_default_include_usage` | per request | each request |
+| `allow_auto_truncate` | per request | each request |
+| `trust_request_chat_template` | per request | each request |
+
+Scope construction, then scope each request:
+
+```python
+from llm_router_utils.sglang.srt.runtime_context import use_runtime_context
+
+# 1. Build each model's objects inside that model's scope.
+with use_runtime_context(server_args=a_args, model_config=a_model_config):
+    manager = TokenizerManager(a_args, port_args)
+    template_manager = TemplateManager()
+    template_manager.initialize_templates(
+        tokenizer_manager=manager,
+        model_path=a_args.model_path,
+        chat_template=a_args.chat_template,
+    )
+    serving = OpenAIServingChat(manager, template_manager)
+
+# 2. Serve each request inside the same scope, because the per-request
+#    fields above are read from the global on every call.
+with use_runtime_context(server_args=a_args, model_config=a_model_config):
+    result = serving._process_messages(request, is_multimodal=False)
+```
+
+Repeat per model, so each instance is built while its own config is in scope.
+
+> **Do not** wrap only request handling. After model B is built, model A's
+> already-constructed objects no longer see their own `hf_chat_template_name` or
+> `default_chat_template_kwargs`; a request-scoped `use_runtime_context` leaves
+> A serving with B's setup-time values.
+
+
 
 ## License
 

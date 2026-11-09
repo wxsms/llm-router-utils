@@ -26,7 +26,7 @@ import dataclasses
 import socket
 import tempfile
 import uuid
-from typing import Optional
+from typing import List, Optional
 
 
 @dataclasses.dataclass
@@ -50,6 +50,19 @@ class ServerArgs:
     incremental_streaming_output: bool = False
     stream_response_default_include_usage: bool = False
     allow_auto_truncate: bool = False
+    # Upstream declares these three in arg_groups/fields/serving.py. They must
+    # exist here too: runtime_context._ServingConfig falls back to its built-in
+    # defaults for any field missing from ServerArgs, which would freeze them at
+    # False and silently ignore an operator's setting.
+    trust_request_chat_template: bool = False
+    return_input_ids: bool = False
+    return_output_ids: bool = False
+    # Upstream declares these two in arg_groups/fields/observability.py and
+    # serving_base.extract_custom_labels() reads them. Without them here the
+    # allow-list is permanently None and custom metric labels can never be
+    # enabled -- the same unreachable-feature shape as the three fields above.
+    tokenizer_metrics_custom_labels_header: str = "x-custom-labels"
+    tokenizer_metrics_allowed_custom_labels: Optional[List[str]] = None
     skip_tokenizer_init: bool = False
     trust_remote_code: bool = False
     tokenizer_mode: str = "auto"

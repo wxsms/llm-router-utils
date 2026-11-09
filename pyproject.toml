@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llm-router-utils"
-version = "0.8.1"
+version = "0.9.0"
 description = "Lightweight extraction of sglang's reasoning/tool-call parsers and chat template rendering for router services."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -30,23 +30,55 @@ dependencies = [
   "typing_extensions",
   "tiktoken",
   "transformers==5.19.0",
-  "openai==2.6.1",
+  # Imported directly by utils/hf_transformers/tokenizer.py (raw tokenizer
+  # wrapper). Upstream pins it; declaring it removes reliance on transformers'
+  # transitive requirement (DEVELOPMENT.md Step 3.5).
+  "tokenizers==0.23.2",
+  "openai==2.8.0",
   "mistral_common>=1.11.5",
   "packaging",
   "huggingface_hub",
   "msgspec",
+  "regex",
+  "fastapi",
+  # serving_chat.py imports Draft202012Validator at module level (tool-parameter
+  # schema validation). Upstream gets it transitively via mistral_common; this
+  # repo imports it directly, so it is declared here (DEVELOPMENT.md Step 3.5).
+  "jsonschema",
   "xgrammar==0.2.7",
   "json_repair",
+  # DeepSeek-V4 / V4.1 prompt encoding and output parsing moved out of sglang
+  # into DeepSeek's native `deepseek-recipe` package in sglang v0.5.23.
+  # Mirrors upstream's pin and platform marker: wheels exist for Linux
+  # (x86_64/aarch64) and macOS only, so the capability is unavailable on Windows.
+  "deepseek-recipe==0.2.0 ; (sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')) or sys_platform == 'darwin'",
 ]
+
+[project.optional-dependencies]
+fastokens = ["fastokens>=0.3.2"]
+# Inkling rendering delegates to TML's reference renderer. Upstream pins it with
+# the same platform marker as above (Linux x86_64/aarch64, macOS arm64), and the
+# pin tracks upstream exactly (DEVELOPMENT.md Step 3.5).
+#
+# Two constraints are encoded here rather than left to fail obscurely:
+#   * python_version >= '3.11' - tml-renderers publishes cp311-abi3 wheels only
+#     and ships no sdist, so there is nothing to install on 3.10.
+#   * torch - tml_renderers/chat.py does an unconditional `import torch`, but the
+#     wheel declares no Requires-Dist at all, so pip will not pull it. torch is
+#     present anyway via xgrammar's (unpinned) `torch>=1.10.0`, and an unpinned
+#     resolution could drift to a version this repo never tested. The extra
+#     therefore pins the same version upstream does, so the ABI the compiled
+#     .so was built against cannot silently change.
+inkling = [
+  "tml-renderers==0.1.0 ; (python_version >= '3.11') and ((sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')) or (sys_platform == 'darwin' and platform_machine == 'arm64'))",
+  "torch==2.14.1 ; (python_version >= '3.11') and ((sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')) or (sys_platform == 'darwin' and platform_machine == 'arm64'))",
+]
+test = ["pytest", "pytest-cov"]
 
 [project.urls]
 Homepage = "https://github.com/wxsms/llm-router-utils"
 Source = "https://github.com/wxsms/llm-router-utils"
 Issues = "https://github.com/wxsms/llm-router-utils/issues"
-
-[project.optional-dependencies]
-fastokens = ["fastokens>=0.3.2"]
-test = ["pytest", "pytest-cov"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

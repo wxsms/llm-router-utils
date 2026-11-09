@@ -27,6 +27,75 @@ jobs:
       - name: Run tests
         run: PYTHONPATH=src python -m pytest test/ --tb=short
 
+  # The `inkling` and `deepseek-recipe` paths are backed by compiled wheels that
+  # do not exist for every platform, so those tests skip on a plain runner and
+  # their golden-reference assertions would never execute. This leg installs the
+  # real wheels and then FAILS IF ANYTHING SKIPPED, so a format change in an
+  # extracted package is caught here instead of passing vacuously.
+  platform-extras:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # tml-renderers==0.1.0 publishes cp311-abi3 wheels only (no sdist), and
+        # the `inkling` extra's marker therefore requires >= 3.11.
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package + platform extras
+        # deepseek-recipe arrives via the default dependencies on Linux (its
+        # platform marker selects it), so one install command pulls both.
+        run: |
+          python -m pip install -e ".[test,inkling]"
+          python -c "import deepseek_recipe; print('deepseek-recipe import ok')"
+          python -c "import tml_renderers; print('tml-renderers import ok')"
+
+      # A bare "no skips" assertion is not enough: "no tests ran", "8 deselected"
+      # and "5 passed, 2 xfailed" all lack the word "skipped" and would pass
+      # green. Assert a pass-count *floor* instead: a renamed or emptied test
+      # file drops below it and fails, while adding a test still passes. (An
+      # exact count would break CI for anyone who adds a test here.)
+      - name: DeepSeek-V4.1 tests must run, not skip
+        run: |
+          set -o pipefail
+          PYTHONPATH=src python -m pytest \
+            test/unit/function_call/test_deepseekv41_detector.py \
+            -q -rs --no-header | tee /tmp/dsv41.txt
+          if grep -qE '[0-9]+ (skipped|deselected|xfailed|error)' /tmp/dsv41.txt; then
+            echo "::error::deepseekv41 tests did not all run - deepseek-recipe not usable"
+            exit 1
+          fi
+          passed=$(sed -nE 's/^([0-9]+) passed.*/\1/p' /tmp/dsv41.txt | head -1)
+          if [ -z "${passed}" ] || [ "${passed}" -lt 8 ]; then
+            echo "::error::expected at least 8 passed, got '${passed:-none}'"
+            cat /tmp/dsv41.txt
+            exit 1
+          fi
+
+      - name: Inkling golden-reference tests must run, not skip
+        run: |
+          set -o pipefail
+          PYTHONPATH=src python -m pytest test/unit/parser/test_inkling_renderer.py \
+            -q -rs --no-header | tee /tmp/inkling.txt
+          if grep -qE '[0-9]+ (skipped|deselected|xfailed|error)' /tmp/inkling.txt; then
+            echo "::error::inkling tests did not all run - tml-renderers not usable"
+            exit 1
+          fi
+          passed=$(sed -nE 's/^([0-9]+) passed.*/\1/p' /tmp/inkling.txt | head -1)
+          if [ -z "${passed}" ] || [ "${passed}" -lt 14 ]; then
+            echo "::error::expected at least 14 passed, got '${passed:-none}'"
+            cat /tmp/inkling.txt
+            exit 1
+          fi
+
+      - name: Full suite with every platform extra present
+        run: PYTHONPATH=src python -m pytest test/ --tb=short
+
   invariants:
     # Version-independent checks that need the upstream submodule: torch-import
     # ban, parity against vendor/sglang, and Apache 2.0 license compliance.
@@ -46,6 +115,9 @@ jobs:
 
       - name: No direct torch import in src/
         run: make check-torch
+
+      - name: Release version consistency
+        run: make check-version
 
       - name: Parity check (no NEW drift vs upstream)
         run: make check-parity

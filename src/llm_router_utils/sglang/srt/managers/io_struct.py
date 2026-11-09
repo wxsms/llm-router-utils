@@ -14,12 +14,19 @@
 # Derivative work: slimmed for llm-router-utils. See DEVELOPMENT.md.
 # Original copyright notice retained per Apache 2.0 §4(b)/§4(c).
 # ==============================================================================
-"""Lightweight io_struct — placeholder for GenerateReqInput/EmbeddingReqInput.
+"""Lightweight io_struct — the subset of GenerateReqInput/EmbeddingReqInput
+that ``serving_chat.py`` actually constructs.
 
 The original io_struct.py is 2282 lines with many inference-specific fields.
-This slim version exists only so that imports in serving_base.py and
-serving_chat.py keep working. Since llm-router-utils does not perform
-inference, these classes are not actively constructed.
+Most are inference-engine state. What must **not** be slimmed away are the
+fields the byte-identical ``serving_chat.py`` passes as keyword arguments in
+``_convert_to_internal_request``: a missing one is a ``TypeError`` on the first
+line of real work, and nothing in this repo calls that method, so no test sees
+it. ``test_io_struct_surface.py`` now enumerates the construction sites and
+fails when a keyword has no field.
+
+Many fields are inert pass-through state here (upstream consumers live in
+stripped runtime code); they are carried for protocol parity.
 """
 from __future__ import annotations
 
@@ -29,7 +36,7 @@ from typing import Any, Dict, List, Optional, Union
 
 @dataclass
 class GenerateReqInput:
-    """Minimal GenerateReqInput — only fields still referenced by retained code."""
+    """GenerateReqInput — every field ``serving_chat.py`` passes must exist."""
 
     rid: Optional[Union[str, List[str]]] = field(default=None, kw_only=True)
     session_id: Optional[str] = field(default=None, kw_only=True)
@@ -63,6 +70,25 @@ class GenerateReqInput:
     sampling_logprobs_mode: Optional[str] = None
     # Inference-time fields kept as Any for compatibility
     received_time: Any = None
+
+    # -- Fields serving_chat._convert_to_internal_request passes. Types and
+    # -- defaults transcribed from upstream v0.5.23 io_struct.py.
+    return_sampling_mask: Optional[Union[List[bool], bool]] = None
+    return_text_in_logprobs: bool = False
+    return_flat_raw_output_top_logprobs: bool = False
+    return_flat_raw_top_logprobs_b64: bool = False
+    cache_salt: Optional[Union[List[str], str]] = None
+    routing_key: Optional[str] = None
+    custom_labels: Optional[Dict[str, str]] = None
+    custom_logit_processor: Optional[Union[List[Optional[str]], str]] = None
+    images_config: Optional[dict] = None
+    video_config: Optional[Dict[str, Any]] = None
+    mm_processor_kwargs: Optional[dict] = None
+    image_max_dynamic_patch: Optional[int] = None
+    video_max_dynamic_patch: Optional[int] = None
+    max_dynamic_patch: Optional[int] = None
+    use_audio_in_video: bool = False
+    return_prompt_token_ids: bool = False
 
 
 @dataclass

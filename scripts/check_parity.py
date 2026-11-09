@@ -35,8 +35,11 @@ do not affect the exit code.
 Usage::
 
     python scripts/check_parity.py
-    python scripts/check_parity.py --rel-path srt/function_call/inkling_detector.py
-    python scripts/check_parity.py --diff srt/parser/reasoning_parser.py
+    python scripts/check_parity.py --rel-path function_call/inkling_detector.py
+    python scripts/check_parity.py --diff parser/reasoning_parser.py
+
+Paths are relative to the retained root (``.../sglang/srt``): omit the ``srt/``
+prefix, or the run aborts with "No retained files matched".
 """
 
 from __future__ import annotations
@@ -204,15 +207,39 @@ def _collapse_xgrammar_guard(lines: list[str]) -> list[str]:
     return out
 
 
-# Rule 3: drop the cuda_coredump import line.
+# Rule 3: drop the cuda_coredump block.
+#
+# This must match BOTH dialects: the retained side has already been rewritten
+# to ``llm_router_utils.sglang.``, so a ``sglang.``-only pattern silently never
+# fires and the line is compared instead of dropped. That dead-code state is how
+# a *live* import of a module this repo does not carry
+# (``srt.debug_utils.cuda_coredump``) stayed invisible.
+#
+# The whole ``if envs.SGLANG_CUDA_COREDUMP.get():`` block goes with it, because
+# the retained side replaces it with an explanatory comment rather than the bare
+# import -- leaving the guard behind would itself register as drift.
 _CUDACOREDUMP_RE = re.compile(
-    r"^\s*import\s+sglang\.srt\.debug_utils\.cuda_coredump\s*(#.*)?$"
+    r"^\s*(?:if\s+envs\.SGLANG_CUDA_COREDUMP\.get\(\)\s*:"
+    r"|import\s+(?:llm_router_utils\.)?sglang\.srt\.debug_utils"
+    r"\.cuda_coredump\b.*)$"
+)
+
+#: The retained replacement for that block. It is an explanatory comment
+#: instead of code, so it is stripped on the retained side only.
+_CUDACOREDUMP_NOTE_RE = re.compile(
+    r"^\s*#\s*(?:Upstream imports ``srt\.debug_utils\.cuda_coredump``"
+    r"|SGLANG_CUDA_COREDUMP=1, to auto-inject"
+    r"|is part of the CUDA runtime and is not retained"
+    r"|conditional import is dropped \(see CLAUDE\.md"
+    r"|cuda_coredump\)\. The env vars below remain readable)"
 )
 
 
 def _drop_cuda_coredump(text: str) -> str:
     return "\n".join(
-        line for line in text.splitlines() if not _CUDACOREDUMP_RE.match(line)
+        line
+        for line in text.splitlines()
+        if not _CUDACOREDUMP_RE.match(line) and not _CUDACOREDUMP_NOTE_RE.match(line)
     )
 
 
@@ -263,11 +290,50 @@ def _normalize_whitespace(text: str) -> str:
     return "\n".join(out) + "\n"
 
 
+def _strip_derivative_notice(text: str) -> str:
+    """Drop the Apache 2.0 §4(b) "Derivative work" notice block.
+
+    Rule 6 requires slimmed files to carry a notice between the upstream header
+    and the docstring. That notice is the only difference for some otherwise
+    fully-retained files, and without stripping it here a header-only edit is
+    classified as a *logic* hunk -- which is how ``parser/template_manager.py``
+    ended up on the parity baseline despite matching upstream exactly.
+
+    The block is a run of ``# ====`` separators wrapping the two notice lines,
+    so dropping the notice lines alone would leave the separators behind and
+    still register as drift. Removing any ``# ====`` line that is *not* part of
+    the upstream header is enough: the header's own closing separator is kept on
+    both sides, so parity is preserved either way.
+    """
+    out: list[str] = []
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith("# Derivative work:"):
+            continue
+        if stripped.startswith("# Original copyright notice retained per"):
+            continue
+        out.append(line)
+
+    # Collapse the now-duplicated separators that flanked the notice. Two or
+    # more consecutive identical "# ====" lines become one.
+    collapsed: list[str] = []
+    for line in out:
+        if (
+            collapsed
+            and line.strip().startswith("# =")
+            and collapsed[-1].strip() == line.strip()
+        ):
+            continue
+        collapsed.append(line)
+    return "".join(collapsed)
+
+
 def normalize(text: str) -> str:
     """Apply all normalization rules to a file's text."""
     text = _rewrite_imports(text)
     text = _drop_cuda_coredump(text)
     text = _strip_any_from_typing(text)
+    text = _strip_derivative_notice(text)
     lines = text.splitlines(keepends=True)
     lines = _collapse_xgrammar_guard(lines)
     text = "".join(lines)
@@ -290,13 +356,91 @@ _EXPECTED_PATTERNS = [
     re.compile(r"^\s*except\s"),
     re.compile(r"=\s*Any\s*$"),
     re.compile(r"cuda_coredump"),
-    re.compile(r"llm_router_utils\.sglang\."),
-    re.compile(r"^\s*from\s+sglang\."),
-    re.compile(r"^\s*import\s+sglang\."),
 ]
 
+# A line that is an import differing *only* by the package prefix is expected.
+# Matching the bare substring `llm_router_utils.sglang.` was too weak: an
+# imported symbol change (`import bar` -> `baz`) or a changed target module
+# would match it and be silently classified 'expected', hiding real drift. So
+# compare the line with the prefix stripped instead of substring-testing.
+_RETAINED_PREFIX_RE = re.compile(r"^(?P<lead>\s*(?:from|import)\s+)llm_router_utils\.sglang\.")
 
-def _classify_hunk(diff_lines: list[str]) -> str:
+#: Documented module renames this repo applies on top of the prefix map
+#: (DEVELOPMENT.md rule 5: ``hf_transformers_utils`` -> ``hf_transformers``).
+#: Applied to the upstream-side line before comparison so the sanctioned rename
+#: is not mistaken for drift by the stricter equivalence test below.
+_DOCUMENTED_MODULE_RENAMES = (
+    ("srt.utils.hf_transformers_utils", "srt.utils.hf_transformers"),
+)
+
+
+def _apply_documented_renames(line: str) -> str:
+    for old, new in _DOCUMENTED_MODULE_RENAMES:
+        line = line.replace(old, new)
+    return line
+
+
+def _is_sanctioned_import_line(line: str, counterpart: str | None) -> bool:
+    """True only when ``line`` is the prefix-mapped twin of ``counterpart``.
+
+    ``normalize()`` applies the import rewrite to BOTH sides, so after
+    normalization the sanctioned transformation has already been undone: a
+    surviving import line is real divergence, not a prefix artefact. An earlier
+    version tested "does this line contain ``llm_router_utils.sglang.``", which
+    is true of *both* sides of every changed import -- so a changed symbol, a
+    changed target module, or a changed arity all came back ``expected``.
+
+    The correct test is structural: take the one other changed line in the hunk
+    (``counterpart``), strip the retained prefix from this line, and require the
+    two to be identical. If they are, the pair differs only by the sanctioned
+    prefix map. Otherwise the hunk is genuine drift.
+    """
+    if counterpart is None:
+        return False
+    stripped = line.strip()
+    if not (stripped.startswith("from ") or stripped.startswith("import ")):
+        return False
+    m = _RETAINED_PREFIX_RE.match(line)
+    if not m:
+        return False
+    mapped = m.group("lead") + "sglang." + line[m.end() :]
+    # The counterpart may itself still carry the retained prefix (both sides are
+    # rewritten), so compare after removing it from whichever side has it, and
+    # after applying the documented module renames to both sides.
+    other = _RETAINED_PREFIX_RE.sub(
+        lambda mm: mm.group("lead") + "sglang.", counterpart
+    )
+    return _apply_documented_renames(mapped).strip() == _apply_documented_renames(
+        other
+    ).strip()
+
+
+#: Files that must remain byte-identical to upstream, so that **any** hunk -- a
+#: deletion included -- counts as logic drift.
+#:
+#: ``_classify_hunk`` treats a pure deletion as sanctioned slimming, because
+#: extracting this repo means cutting methods and a deleted method is the normal
+#: shape of that. But the rule cannot tell "dropped a whole method" from "dropped
+#: a statement inside a method that is still there" -- both are pure deletions.
+#: That made the gate blind where it matters most: deleting the
+#: ``async for content in self.tokenizer_manager.generate_request(...)`` loop from
+#: ``serving_chat.py`` produced ``hunks=['expected','slimming']`` and
+#: ``OK: no new logic drift`` with exit 0, even though that file is documented as
+#: identical to upstream apart from import rewriting (README, CLAUDE.md).
+#:
+#: No context-free heuristic separates a feature-removing deletion (the GGUF
+#: branch dropped from ``utils/hf_transformers/tokenizer.py``, legitimately
+#: slimming) from a behaviour-removing one (the streaming loop above, a
+#: regression), so the distinction is *declared* here rather than guessed. Add a
+#: path when a file's byte-identity is load-bearing.
+_MUST_MATCH_FILES = frozenset(
+    {
+        "entrypoints/openai/serving_chat.py",
+    }
+)
+
+
+def _classify_hunk(diff_lines: list[str], *, must_match: bool = False) -> str:
     """Classify a unified-diff hunk as 'expected', 'slimming', or 'logic'.
 
     - 'expected': every changed line matches a known slimming pattern
@@ -306,13 +450,36 @@ def _classify_hunk(diff_lines: list[str]) -> str:
       substantive additions. Deletions are sanctioned slimming per CLAUDE.md
       ("Only delete or slim"). Blank-only additions are allowed.
     - 'logic': anything else — real divergence to investigate.
+
+    ``must_match`` is set for files in :data:`_MUST_MATCH_FILES`, where deleting
+    is not sanctioned: any changed line there is 'logic' drift.
     """
+    if must_match and any(
+        line.startswith(("+", "-")) and not line.startswith(("+++", "---"))
+        for line in diff_lines
+    ):
+        return "logic"
+
     added = [l[1:] for l in diff_lines if l.startswith("+") and not l.startswith("+++")]
     removed = [l[1:] for l in diff_lines if l.startswith("-") and not l.startswith("---")]
     changed = added + removed
     if not changed:
         return "expected"
-    if all(any(p.search(l) for p in _EXPECTED_PATTERNS) for l in changed):
+
+    def _all_expected() -> bool:
+        for line in changed:
+            if any(p.search(line) for p in _EXPECTED_PATTERNS):
+                continue
+            # An import line survives normalization only if it genuinely
+            # differs. Accept it solely when it is the prefix-mapped twin of
+            # the one other changed line in the hunk.
+            others = [o for o in changed if o is not line]
+            if len(others) == 1 and _is_sanctioned_import_line(line, others[0]):
+                continue
+            return False
+        return True
+
+    if _all_expected():
         return "expected"
     # Pure deletion (no substantive added lines) = sanctioned slimming.
     substantive_added = [l for l in added if l.strip() != ""]
@@ -385,16 +552,17 @@ def compare_file(retained: Path) -> FileResult:
     diff_text = "".join(diff_lines)
 
     # Classify each hunk. A hunk starts with a ``@@`` line.
+    must_match = rel in _MUST_MATCH_FILES
     hunk_classes: list[str] = []
     current: list[str] = []
     for line in diff_lines:
         if line.startswith("@@"):
             if current:
-                hunk_classes.append(_classify_hunk(current))
+                hunk_classes.append(_classify_hunk(current, must_match=must_match))
             current = []
         current.append(line)
     if current:
-        hunk_classes.append(_classify_hunk(current))
+        hunk_classes.append(_classify_hunk(current, must_match=must_match))
 
     logic_drift = any(c == "logic" for c in hunk_classes)
     return FileResult(
